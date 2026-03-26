@@ -3,7 +3,7 @@ import { AREA_MAP, COOK_AREAS, OTHER_AREAS, STORM_EVENTS, DEFAULT_WEIGHTS, WEIGH
 import { parseCSV, normaliseRow } from "./utils/parsers";
 import { scoreProperty, filterByValue } from "./utils/scoring";
 import { fetchHistoricalAlerts, fetchLiveAlerts, fetchHWO, fetchStormHistory as fetchStormHistoryApi } from "./utils/stormApi";
-import { fetchAddressesByCity, fetchAddressesByZip, fetchGlobalMotivatedLeads, enrichAddresses, classifyMotivation } from "./utils/cookCountyApi";
+import { fetchAddressesByCity, fetchAddressesByZip, getGlobalMotivatedLeads, enrichAddresses, classifyMotivation } from "./utils/cookCountyApi";
 import Dashboard  from "./components/Dashboard";
 import Settings   from "./components/Settings";
 import LeadsGrid  from "./components/LeadsGrid";
@@ -225,6 +225,7 @@ export default function StormLeads() {
     } catch { /* silent — history is supplemental */ }
     setLoadingHistory(false);
   };
+
 
   // ── Alert fetching — delegates to stormApi utils ───────────────────────────
 
@@ -449,7 +450,8 @@ export default function StormLeads() {
   };
 
   // ── Global Storm Scout ────────────────────────────────────────────────────────
-  const scoutStormPath = async () => {
+  // ── Global Storm Scout ────────────────────────────────────────────────────────
+  async function scoutStormPath() {
     const hitAreas = areaRanking.filter(a => a.pts >= 2).map(a => a.name);
     if (!hitAreas.length) {
       setPullError("No 'Moderate' or 'Severe' storm areas detected in current alerts.");
@@ -458,7 +460,7 @@ export default function StormLeads() {
 
     setIsScouting(true); setPullError(""); setPullStatus(`Scouting storm path across ${hitAreas.length} areas…`);
     try {
-      const raw = await fetchGlobalMotivatedLeads(hitAreas, 300);
+      const raw = await getGlobalMotivatedLeads(hitAreas, 300);
       if (!raw.length) throw new Error("No highly motivated leads found in the storm path.");
       
       const addrNorm = raw.map(normaliseRow).filter(r => r.address || r.pin);

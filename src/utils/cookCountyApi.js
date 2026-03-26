@@ -253,7 +253,7 @@ export function classifyMotivation(row) {
 }
 
 // ── Bulk Discovery: Get motivated leads across multiple cities ───────────────
-export async function fetchGlobalMotivatedLeads(cities, limit = 500) {
+export async function getGlobalMotivatedLeads(cities, limit = 500) {
   if (!cities.length) return [];
   const year = String(new Date().getFullYear());
   const cityList = cities.map(c => `'${c.toUpperCase()}'`).join(",");
