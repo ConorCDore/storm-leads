@@ -472,7 +472,8 @@ export default function StormLeads() {
         const areaName = AREA_MAP.find(a => a.city === r.city)?.label || selectedArea;
         const alertInfo = areaSeverity[areaName] || { pts: 0, label: "No alerts" };
         const motivation = classifyMotivation(r);
-        return scoreProperty(r, alertInfo, weights, maxYear, motivation);
+        const scoredRow = scoreProperty(r, alertInfo, weights, maxYear, motivation);
+        return { ...scoredRow, motivation };
       }).sort((a, b) => b.score - a.score);
 
       setGlobalLeads(scored);
@@ -1044,7 +1045,11 @@ export default function StormLeads() {
                 displayLeads={displayLeads}
                 sortMode={sortMode}
                 setSortMode={setSortMode}
-                selectedArea={selectedArea}
+                selectedArea={
+                  leads.length > 0 && globalLeads.length > 0 ? "Consolidated Discovery" :
+                  globalLeads.length > 0 ? "Storm Path Discovery" : 
+                  selectedArea
+                }
                 pulledPins={pulledPins}
                 setPulledPins={setPulledPins}
               />

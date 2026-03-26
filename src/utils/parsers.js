@@ -26,6 +26,7 @@ export function parseCSV(text) {
 // ── Row normaliser — handles Cook County dataset column names + PropStream/custom ─
 export function normaliseRow(row) {
   return {
+    ...row,
     address : row.prop_address_full      || row.property_address || row.address  || row.Address || "",
     city    : row.prop_address_city_name || row.property_city    || row.city     || row.City    || "",
     zip     : row.prop_address_zipcode_1 || row.property_zip     || row.zip_code || row.zip     || "",
