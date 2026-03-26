@@ -3,8 +3,9 @@ import { AREA_MAP, COOK_AREAS, OTHER_AREAS, STORM_EVENTS, DEFAULT_WEIGHTS, WEIGH
 import { parseCSV, normaliseRow } from "./utils/parsers";
 import { scoreProperty, filterByValue } from "./utils/scoring";
 import { fetchHistoricalAlerts, fetchLiveAlerts, fetchHWO, fetchStormHistory as fetchStormHistoryApi } from "./utils/stormApi";
-import Dashboard from "./components/Dashboard";
-import Settings  from "./components/Settings";
+import Dashboard  from "./components/Dashboard";
+import Settings   from "./components/Settings";
+import LeadsGrid  from "./components/LeadsGrid";
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 // Fonts loaded via <link> in index.html (preconnect + non-blocking)
@@ -130,6 +131,11 @@ const CSS = `
   /* Lead summary */
   .lead-sum { font-size:.62rem; color:#fb923c; margin-top:4px; font-style:italic; line-height:1.4; opacity:.85; }
 
+  /* Storm event badges on lead cards */
+  .storm-badge { font-family:'Bebas Neue',sans-serif; font-size:.58rem; letter-spacing:.06em; padding:2px 6px; border-radius:2px; }
+  .storm-badge.hail { background:rgba(99,179,237,.12); color:#63b3ed; border:1px solid rgba(99,179,237,.2); }
+  .storm-badge.wind { background:rgba(167,139,250,.12); color:#a78bfa; border:1px solid rgba(167,139,250,.2); }
+
   /* HWO Pre-Storm banner */
   .hwo-banner { background:rgba(251,146,60,.07); border:1px solid rgba(251,146,60,.3); border-radius:4px; padding:12px 14px; margin-top:10px; }
   .hwo-title { font-family:'Bebas Neue',sans-serif; font-size:.85rem; letter-spacing:.1em; color:#fb923c; margin-bottom:5px; display:flex; align-items:center; gap:6px; }
@@ -165,7 +171,6 @@ export default function StormLeads() {
   const [pulling,        setPulling]        = useState(false); // fetching from Socrata
   const [pullStatus,     setPullStatus]     = useState("");    // progress text
   const [pullError,      setPullError]      = useState("");
-  const [copied,         setCopied]         = useState(false);
   const [weights,        setWeights]        = useState({...DEFAULT_WEIGHTS});
   const [pulledPins,     setPulledPins]     = useState(new Set());
   const [hwo,            setHwo]            = useState(null); // { hailMentioned, severeMentioned, summary }
@@ -464,43 +469,10 @@ export default function StormLeads() {
     if (switchTab) setTab("leads");
   };
 
-  // ── Export ──────────────────────────────────────────────────────────────────
-  const exportList = () => {
-    const date = new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
-    let out = `STORM LEAD LIST — ${selectedArea} — ${date}\n`;
-    if (isHistorical) out += `📅 Storm date: ${stormDate} — ${alerts.length} NOAA ground reports\n`;
-    else if (alerts.length) out += `⚡ ${alerts.length} active NWS alerts\n`;
-    out += "═".repeat(44) + "\n\n";
-    ["HIGH","MEDIUM","LOW"].forEach(tier => {
-      const list = leads.filter(l => l.tier === tier);
-      if (!list.length) return;
-      const ico = tier==="HIGH"?"🔴":tier==="MEDIUM"?"🟡":"🟢";
-      out += `${ico} ${tier} — ${list.length} leads\n` + "─".repeat(40) + "\n";
-      list.forEach((l,i) => { out += `${i+1}. ${l.address}\n   Score: ${l.score}/10 — ${l.reason}\n\n`; });
-    });
-    out += `Total: ${leads.length} leads\nSource: Cook County Assessor Open Data + ${isHistorical ? `NOAA/IEM Storm Reports (${stormDate})` : "NOAA NWS"}`;
-    // execCommand fallback — works in sandboxed iframes where clipboard API is blocked
-    try {
-      const el = Object.assign(document.createElement("textarea"), {
-        value: out, style: "position:fixed;opacity:0;top:0;left:0"
-      });
-      document.body.appendChild(el);
-      el.focus(); el.select();
-      document.execCommand("copy");
-      document.body.removeChild(el);
-    } catch(e) {}
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2400);
-  };
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   const sevCls   = s => s==="Extreme"?"ex":s==="Severe"?"sv":s==="Moderate"?"md":"mn";
   const sevColor = s => s==="Extreme"?"#ef4444":s==="Severe"?"#f97316":"#fb923c";
-  const { hi, md, lo } = useMemo(() => ({
-    hi: leads.filter(l=>l.tier==="HIGH"),
-    md: leads.filter(l=>l.tier==="MEDIUM"),
-    lo: leads.filter(l=>l.tier==="LOW"),
-  }), [leads]);
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
@@ -887,93 +859,25 @@ export default function StormLeads() {
           </>}
 
           {/* ── LEADS TAB ─────────────────────────────────────────────────── */}
-          {tab==="leads" && <>
-            {!leads.length ? (
+          {tab==="leads" && (
+            !leads.length ? (
               <div className="empty">
                 <div className="empty-ico">📋</div>
                 No leads scored yet.<br/>
                 <span style={{fontSize:".7rem",color:"#374151"}}>Go to Storm tab and hit Pull & Score.</span>
               </div>
             ) : (
-              <>
-                <div className="stats">
-                  <div className="stat"><div className="stat-n" style={{color:"#ef4444"}}>{hi.length}</div><div className="stat-l">High</div></div>
-                  <div className="stat"><div className="stat-n">{md.length}</div><div className="stat-l">Medium</div></div>
-                  <div className="stat"><div className="stat-n" style={{color:"#4b5563"}}>{lo.length}</div><div className="stat-l">Low</div></div>
-                </div>
-                <div className="res-hd">
-                  <div className="res-stat">{selectedArea} · {leads.length} leads</div>
-                  <div className="row" style={{gap:6}}>
-                    {/* Sort toggle */}
-                    <div style={{display:"flex",border:"1px solid rgba(251,146,60,.25)",borderRadius:3,overflow:"hidden"}}>
-                      {[["score","Score"],["route","Route"]].map(([m,l])=>(
-                        <button key={m} onClick={()=>setSortMode(m)}
-                          style={{padding:"5px 10px",fontSize:".7rem",fontFamily:"'Bebas Neue',sans-serif",letterSpacing:".06em",
-                            border:"none",cursor:"pointer",
-                            background: sortMode===m ? "#fb923c" : "transparent",
-                            color: sortMode===m ? "#080c10" : "#fb923c"}}>
-                          {l}
-                        </button>
-                      ))}
-                    </div>
-                    {pulledPins.size > 0 && (
-                      <button className="btn sm outline" title="Reset duplicate suppression — next pull will re-fetch all properties"
-                        onClick={()=>setPulledPins(new Set())}>
-                        Clear History
-                      </button>
-                    )}
-                    <button className={`btn${copied?" green":""}`} onClick={exportList}>
-                      {copied?"✓ Copied!":"Copy List"}
-                    </button>
-                  </div>
-                </div>
-                {sortMode==="route" && (
-                  <div style={{fontSize:".62rem",color:"#6b7280",marginBottom:8,padding:"6px 10px",background:"rgba(255,255,255,.02)",border:"1px solid rgba(255,255,255,.05)",borderRadius:3}}>
-                    Route order: sorted by zip → street → house number for efficient canvassing. Tier badges preserved.
-                  </div>
-                )}
-                {/* Weights moved to Settings tab */}
-                {sortMode === "route" ? (
-                  // Route mode — flat list sorted geographically, tier shown as left-border color
-                  displayLeads.map((l,i) => (
-                    <div key={i} className={`lead ${l.tier==="HIGH"?"hi":l.tier==="MEDIUM"?"md":"lo"}`}>
-                      <div className="lead-body">
-                        <div className="lead-addr" title={l.address}>{l.address}</div>
-                        {l.summary && <div className="lead-sum">{l.summary}</div>}
-                        <div className="lead-why">{l.reason}</div>
-                      </div>
-                      <div className="score-box">
-                        <div className="score-n">{l.score}</div>
-                        <div className="score-s">/10</div>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  // Score mode — grouped by tier
-                  [["HIGH",hi,"hi","🔴"],["MEDIUM",md,"md","🟡"],["LOW",lo,"lo","🟢"]].map(([tier,list,cls,ico])=>
-                    list.length>0 && (
-                      <div key={tier}>
-                        <div className={`tier-h ${cls}`}>{ico} {tier} — {list.length}</div>
-                        {list.map((l,i)=>(
-                          <div key={i} className={`lead ${cls}`}>
-                            <div className="lead-body">
-                              <div className="lead-addr" title={l.address}>{l.address}</div>
-                              {l.summary && <div className="lead-sum">{l.summary}</div>}
-                              <div className="lead-why">{l.reason}</div>
-                            </div>
-                            <div className="score-box">
-                              <div className="score-n">{l.score}</div>
-                              <div className="score-s">/10</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )
-                  )
-                )}
-              </>
-            )}
-          </>}
+              <LeadsGrid
+                leads={leads}
+                displayLeads={displayLeads}
+                sortMode={sortMode}
+                setSortMode={setSortMode}
+                selectedArea={selectedArea}
+                pulledPins={pulledPins}
+                setPulledPins={setPulledPins}
+              />
+            )
+          )}
 
           {/* ── SETTINGS TAB ──────────────────────────────────────────────── */}
           {tab==="settings" && (

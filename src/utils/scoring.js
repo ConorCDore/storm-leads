@@ -1,4 +1,4 @@
-import { ROOF_VULN } from "../constants";
+import { ROOF_VULN, WEIGHT_LABELS } from "../constants";
 
 // ── Roof material inference ───────────────────────────────────────────────────
 // Fallback when Cook County inspection record is absent (~89% of properties).
@@ -25,31 +25,35 @@ export function filterByValue(properties, minValue, maxValue) {
 }
 
 // ── Score a single property ───────────────────────────────────────────────────
-// Returns { pin, address, score, tier, reason, summary }
+// Returns { pin, address, score, tier, reason, summary, breakdown }
 // weights: { roofAge, propertyValue, stormSeverity, roofMaterial, permitAge } each 0-5
 // alertInfo: { pts: 0-3, label: string }
 export function scoreProperty(r, alertInfo, weights, maxYear = 2010) {
-  const reasons  = [];
-  const factors  = {};
-  const thisYear = new Date().getFullYear();
+  const reasons       = [];
+  const factors       = {};
+  const factorDetails = {};  // human-readable per-factor label for breakdown card
+  const thisYear      = new Date().getFullYear();
 
   // Roof Age (0-3)
   const yr = parseInt(r.year);
-  if      (yr >= 1960 && yr <= 1990) { factors.roofAge = 3; reasons.push(`Built ${yr} (prime age)`); }
-  else if (yr >= 1991 && yr <= 2005) { factors.roofAge = 2; reasons.push(`Built ${yr}`); }
-  else if (yr > 2005  && yr <= maxYear){ factors.roofAge = 1; reasons.push(`Built ${yr}`); }
-  else                                { factors.roofAge = 1; reasons.push(yr > 0 ? `Built ${yr}` : "Year unknown"); }
+  if      (yr >= 1960 && yr <= 1990) { factors.roofAge = 3; factorDetails.roofAge = `Built ${yr} (prime age)`; }
+  else if (yr >= 1991 && yr <= 2005) { factors.roofAge = 2; factorDetails.roofAge = `Built ${yr}`; }
+  else if (yr > 2005  && yr <= maxYear){ factors.roofAge = 1; factorDetails.roofAge = `Built ${yr}`; }
+  else                                { factors.roofAge = 1; factorDetails.roofAge = yr > 0 ? `Built ${yr}` : "Year unknown"; }
+  reasons.push(factorDetails.roofAge);
 
   // Property Value (0-3)
   const av = parseInt(r.value);
-  if      (av >= 60000 && av <= 180000) { factors.propertyValue = 3; reasons.push(`AV $${av.toLocaleString()}`); }
-  else if (av > 180000)                  { factors.propertyValue = 2; reasons.push(`AV $${av.toLocaleString()} (high-end)`); }
-  else if (av > 0)                       { factors.propertyValue = 1; reasons.push(`AV $${av.toLocaleString()}`); }
-  else                                   { factors.propertyValue = 1; reasons.push("AV unknown"); }
+  if      (av >= 60000 && av <= 180000) { factors.propertyValue = 3; factorDetails.propertyValue = `AV $${av.toLocaleString()}`; }
+  else if (av > 180000)                  { factors.propertyValue = 2; factorDetails.propertyValue = `AV $${av.toLocaleString()} (high-end)`; }
+  else if (av > 0)                       { factors.propertyValue = 1; factorDetails.propertyValue = `AV $${av.toLocaleString()}`; }
+  else                                   { factors.propertyValue = 1; factorDetails.propertyValue = "AV unknown"; }
+  reasons.push(factorDetails.propertyValue);
 
   // Storm Severity (0-3)
-  factors.stormSeverity = alertInfo.pts;
-  if (alertInfo.pts > 0) reasons.push(alertInfo.label);
+  factors.stormSeverity       = alertInfo.pts;
+  factorDetails.stormSeverity = alertInfo.pts > 0 ? alertInfo.label : "No active alerts";
+  if (alertInfo.pts > 0) reasons.push(factorDetails.stormSeverity);
 
   // Roof Material (0-3) — verified first, year-based inference fallback
   const mat      = (r.roofMaterial || "").toLowerCase();
@@ -58,23 +62,26 @@ export function scoreProperty(r, alertInfo, weights, maxYear = 2010) {
     : -1;
   let roofLabel = "";
   if (matScore >= 0) {
-    factors.roofMaterial = matScore;
-    roofLabel = `${r.roofMaterial}${matScore === 0 ? " (durable)" : ""}`;
-    reasons.push(`${roofLabel} ✓`);
+    factors.roofMaterial       = matScore;
+    roofLabel                  = `${r.roofMaterial}${matScore === 0 ? " (durable)" : ""}`;
+    factorDetails.roofMaterial = `${roofLabel} ✓`;
+    reasons.push(factorDetails.roofMaterial);
   } else {
-    const inf = inferRoofMaterial(yr);
-    factors.roofMaterial = inf.score;
-    roofLabel = inf.label + " (est.)";
+    const inf                  = inferRoofMaterial(yr);
+    factors.roofMaterial       = inf.score;
+    roofLabel                  = inf.label + " (est.)";
+    factorDetails.roofMaterial = roofLabel;
     reasons.push(roofLabel);
   }
 
   // Permit History (0-3)
   const permitYr = parseInt(r.lastPermitYear);
-  if      (!permitYr)                        { factors.permitAge = 2; reasons.push("No roof permit found"); }
-  else if (thisYear - permitYr > 15)         { factors.permitAge = 3; reasons.push(`Last permit ${permitYr} (aged)`); }
-  else if (thisYear - permitYr > 10)         { factors.permitAge = 2; reasons.push(`Last permit ${permitYr}`); }
-  else if (thisYear - permitYr > 5)          { factors.permitAge = 1; reasons.push(`Permit ${permitYr}`); }
-  else                                       { factors.permitAge = 0; reasons.push(`Recent permit ${permitYr}`); }
+  if      (!permitYr)                        { factors.permitAge = 2; factorDetails.permitAge = "No roof permit found"; }
+  else if (thisYear - permitYr > 15)         { factors.permitAge = 3; factorDetails.permitAge = `Last permit ${permitYr} (aged)`; }
+  else if (thisYear - permitYr > 10)         { factors.permitAge = 2; factorDetails.permitAge = `Last permit ${permitYr}`; }
+  else if (thisYear - permitYr > 5)          { factors.permitAge = 1; factorDetails.permitAge = `Permit ${permitYr}`; }
+  else                                       { factors.permitAge = 0; factorDetails.permitAge = `Recent permit ${permitYr}`; }
+  reasons.push(factorDetails.permitAge);
 
   // Weighted score — each factor 0-3, weights 0-5, normalize to 0-10
   let totalWeight = 0, totalScore = 0;
@@ -100,5 +107,14 @@ export function scoreProperty(r, alertInfo, weights, maxYear = 2010) {
   const tier    = score >= 7 ? "HIGH" : score >= 4 ? "MEDIUM" : "LOW";
   const address = [r.address, r.city, r.zip].filter(Boolean).join(", ") || r.pin || "unknown";
 
-  return { pin: r.pin || "", address, score, tier, reason: reasons.join(" · "), summary };
+  // Structured breakdown for expandable card view
+  const breakdown = Object.keys(factors).map(key => ({
+    key,
+    label : WEIGHT_LABELS[key] || key,
+    raw   : factors[key],
+    weight: weights[key] || 0,
+    detail: factorDetails[key] || "",
+  }));
+
+  return { pin: r.pin || "", address, score, tier, reason: reasons.join(" · "), summary, breakdown };
 }
