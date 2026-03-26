@@ -3,9 +3,11 @@ import { AREA_MAP, COOK_AREAS, OTHER_AREAS, STORM_EVENTS, DEFAULT_WEIGHTS, WEIGH
 import { parseCSV, normaliseRow } from "./utils/parsers";
 import { scoreProperty, filterByValue } from "./utils/scoring";
 import { fetchHistoricalAlerts, fetchLiveAlerts, fetchHWO, fetchStormHistory as fetchStormHistoryApi } from "./utils/stormApi";
+import { fetchAddressesByCity, fetchAddressesByZip, enrichAddresses } from "./utils/cookCountyApi";
 import Dashboard  from "./components/Dashboard";
 import Settings   from "./components/Settings";
 import LeadsGrid  from "./components/LeadsGrid";
+import StormMap   from "./components/StormMap";
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 // Fonts loaded via <link> in index.html (preconnect + non-blocking)
@@ -180,6 +182,8 @@ export default function StormLeads() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [minHailSize,    setMinHailSize]    = useState(0);   // 0 = no filter
   const [sortMode,       setSortMode]       = useState("score"); // "score" | "route"
+  const [selectedZips,   setSelectedZips]   = useState([]);  // ZIP codes chosen on map
+  const [showMap,        setShowMap]        = useState(false);
   const fileRef = useRef();
 
   // Inject CSS once (avoids React diffing ~6KB string every render)
@@ -225,146 +229,73 @@ export default function StormLeads() {
     setFetchingAlerts(false);
   };
 
-  // ── Direct Socrata fetch — addresses + assessments + building chars + roof + permits ─
-  // Datasets:
-  //   3723-97qp  Addresses     — pin, address, city, zip, owner
-  //   uzyt-m557  Assessments   — pin, class, certified_tot (AV)
-  //   bcnq-qi2z  Building      — pin, class, age (years old), bldg_sf
-  //   x54s-btds  Chars (roof)  — pin, char_roof_cnst (material code)
-  //   6yjf-dfxs  Permits       — pin, issue_date, work type
+  // ── Shared enrichment + scoring step ─────────────────────────────────────────
+  // Called by both pullAndScore (city-based) and pullByZips (map-based).
+  const finishPull = async (addrNorm) => {
+    const { merged, matchCount, roofCount, permitCount } =
+      await enrichAddresses(addrNorm, setPullStatus);
+    const roofEst   = merged.length - roofCount;
+    const newMerged = merged.filter(r => !r.pin || !pulledPins.has(r.pin));
+    const dupCount  = merged.length - newMerged.length;
+    const filtered  = filterByValue(newMerged, minValue, maxValue);
+    setPullStatus(
+      `Enriched ${matchCount}/${addrNorm.length} · ` +
+      `Roof: ${roofCount} verified, ${roofEst} estimated · ${permitCount} permits` +
+      `${dupCount ? ` · ${dupCount} dup suppressed` : ""}` +
+      `${filtered.length < newMerged.length ? ` · ${newMerged.length - filtered.length} filtered by value` : ""}. Scoring…`
+    );
+    setRows(filtered);
+    const alertInfo = getAlertScore();
+    const scored = filtered.map(r => scoreProperty(r, alertInfo, weights, maxYear))
+      .sort((a, b) => b.score - a.score);
+    setLeads(scored);
+    setPulledPins(prev => new Set([...prev, ...newMerged.map(r => r.pin).filter(Boolean)]));
+    setPullStatus(
+      `Done — ${scored.length} leads scored` +
+      `${dupCount ? ` · ${dupCount} dup suppressed` : ""}` +
+      `${filtered.length < newMerged.length ? ` · ${newMerged.length - filtered.length} filtered by value` : ""}`
+    );
+    setTab("leads");
+  };
+
+  // ── City-based pull (dropdown selection) ──────────────────────────────────────
   const pullAndScore = async () => {
     if (!area?.township) return;
     setPulling(true); setPullError(""); setPullStatus("Fetching addresses…"); setRows([]); setLeads([]);
     try {
-      // Step 1: Fetch addresses for this city
-      const dataYear = String(new Date().getFullYear());
-      const addrUrl = `https://datacatalog.cookcountyil.gov/resource/3723-97qp.json` +
-        `?$where=${encodeURIComponent(`upper(prop_address_city_name)='${area.city}' AND year='${dataYear}'`)}` +
-        `&$select=pin,prop_address_full,prop_address_city_name,prop_address_zipcode_1,owner_address_name` +
-        `&$limit=${limit}`;
-
-      const addrRes = await fetch(addrUrl);
-      if (!addrRes.ok) throw new Error(`Address API returned ${addrRes.status}: ${await addrRes.text().catch(()=>"")}`);
-      const addrJson = await addrRes.json();
+      const addrJson = await fetchAddressesByCity(area.city, limit);
       if (!addrJson.length) throw new Error(`No properties found for ${area.city}. Try a different area or increase the limit.`);
-
       const addrNorm = addrJson.map(normaliseRow).filter(r => r.address || r.pin);
       setPullStatus(`Got ${addrNorm.length} addresses. Fetching assessments, building, roof & permit data…`);
-
-      // Step 2: Fetch all enrichment data — 4 datasets in parallel batches
-      const pins = addrNorm.map(r => r.pin).filter(Boolean);
-      const PIN_BATCH = 100;
-      const assessMap = new Map();
-      const bldgMap = new Map();
-      const roofMap = new Map();
-      const permitMap = new Map();
-      const thisYear = new Date().getFullYear();
-
-      const fetches = [];
-      for (let i = 0; i < pins.length; i += PIN_BATCH) {
-        const pinList = pins.slice(i, i + PIN_BATCH).map(p => `'${p}'`).join(",");
-        fetches.push(
-          // 0: Assessments
-          fetch(`https://datacatalog.cookcountyil.gov/resource/uzyt-m557.json` +
-            `?$where=${encodeURIComponent(`pin in(${pinList}) AND year='${String(new Date().getFullYear() - 1)}'`)}` +
-            `&$select=pin,class,certified_tot&$limit=${PIN_BATCH}`).catch(() => null),
-          // 1: Building chars (age)
-          fetch(`https://datacatalog.cookcountyil.gov/resource/bcnq-qi2z.json` +
-            `?$where=${encodeURIComponent(`pin in(${pinList})`)}` +
-            `&$select=pin,class,age,bldg_sf&$limit=${PIN_BATCH}`).catch(() => null),
-          // 2: Roof material — NOT NULL filter squeezes max verified coverage from dataset
-          fetch(`https://datacatalog.cookcountyil.gov/resource/x54s-btds.json` +
-            `?$where=${encodeURIComponent(`pin in(${pinList}) AND char_roof_cnst IS NOT NULL AND char_roof_cnst != ''`)}` +
-            `&$select=pin,char_roof_cnst&$order=year DESC&$limit=500`).catch(() => null),
-          // 3: Permits (roofing)
-          fetch(`https://datacatalog.cookcountyil.gov/resource/6yjf-dfxs.json` +
-            `?$where=${encodeURIComponent(`pin in(${pinList}) AND upper(work_description) like '%ROOF%'`)}` +
-            `&$select=pin,date_issued&$order=date_issued DESC&$limit=${PIN_BATCH}`).catch(() => null),
-        );
-      }
-
-      setPullStatus(`Fetching details for ${pins.length} properties (4 datasets)…`);
-      const results = await Promise.all(fetches);
-
-      // Process results — 4 per batch: assess, bldg, roof, permits
-      for (let i = 0; i < results.length; i++) {
-        const res = results[i];
-        if (!res?.ok) continue;
-        const data = await res.json();
-        const idx = i % 4;
-        if (idx === 0) {
-          for (const r of data) assessMap.set(r.pin, { cls: r.class || "", value: r.certified_tot || "" });
-        } else if (idx === 1) {
-          for (const r of data) {
-            const age = parseInt(r.age);
-            bldgMap.set(r.pin, { year: age > 0 ? String(thisYear - age) : "", cls: r.class || "" });
-          }
-        } else if (idx === 2) {
-          for (const r of data) {
-            const raw = String(r.char_roof_cnst || "").trim();
-            if (raw) roofMap.set(r.pin, raw);
-          }
-        } else {
-          // Permits — keep most recent per PIN
-          for (const r of data) {
-            if (!permitMap.has(r.pin) && r.date_issued) {
-              const yr = new Date(r.date_issued).getFullYear();
-              if (yr > 1900) permitMap.set(r.pin, yr);
-            }
-          }
-        }
-      }
-
-      // Step 3: Merge all data onto address rows
-      const merged = addrNorm.map(r => {
-        const assess = r.pin ? assessMap.get(r.pin) : null;
-        const bldg   = r.pin ? bldgMap.get(r.pin)   : null;
-        return {
-          ...r,
-          year          : r.year  || bldg?.year  || "",
-          value         : r.value || assess?.value || "",
-          cls           : r.cls   || assess?.cls  || bldg?.cls || "",
-          roofMaterial  : (r.pin && roofMap.get(r.pin)) || "",
-          lastPermitYear: (r.pin && permitMap.get(r.pin)) || "",
-        };
-      });
-
-      const matchCount  = merged.filter(r => r.year || r.value || r.cls).length;
-      const roofCount   = merged.filter(r => r.roofMaterial).length;
-      const roofEst     = merged.length - roofCount;
-      const permitCount = merged.filter(r => r.lastPermitYear).length;
-
-      // Duplicate suppression — filter PINs already scored in this session
-      const newMerged = merged.filter(r => !r.pin || !pulledPins.has(r.pin));
-      const dupCount  = merged.length - newMerged.length;
-
-      const filtered = filterByValue(newMerged, minValue, maxValue);
-      setPullStatus(
-        `Enriched ${matchCount}/${addrNorm.length} · ` +
-        `Roof: ${roofCount} verified, ${roofEst} estimated · ` +
-        `${permitCount} permits` +
-        `${dupCount ? ` · ${dupCount} duplicates suppressed` : ""}` +
-        `${filtered.length < newMerged.length ? ` · ${newMerged.length - filtered.length} filtered by value` : ""}. Scoring…`
-      );
-
-      setRows(filtered);
-      const alertInfo = getAlertScore();
-      const scored = filtered.map(r => scoreProperty(r, alertInfo, weights, maxYear)).sort((a, b) => b.score - a.score);
-      setLeads(scored);
-      // Register these PINs as pulled so re-pulls suppress duplicates
-      setPulledPins(prev => new Set([...prev, ...newMerged.map(r => r.pin).filter(Boolean)]));
-      setPullStatus(
-        `Done — ${scored.length} leads scored` +
-        `${dupCount ? ` · ${dupCount} duplicates suppressed` : ""}` +
-        `${filtered.length < newMerged.length ? ` · ${newMerged.length - filtered.length} filtered by value` : ""}`
-      );
-      setTab("leads");
+      await finishPull(addrNorm);
     } catch (e) {
       console.error("Pull error:", e);
       setPullError(e.message || "Failed to fetch data from Cook County API.");
     }
     setPulling(false);
   };
+
+  // ── ZIP-based pull (map selection) ────────────────────────────────────────────
+  const pullByZips = async (zips) => {
+    if (!zips.length) return;
+    setPulling(true); setPullError(""); setPullStatus(`Fetching addresses for ${zips.length} ZIP${zips.length > 1 ? "s" : ""}…`); setRows([]); setLeads([]);
+    try {
+      const addrJson = await fetchAddressesByZip(zips, limit);
+      if (!addrJson.length) throw new Error(`No properties found in ZIP${zips.length > 1 ? "s" : ""}: ${zips.join(", ")}`);
+      const addrNorm = addrJson.map(normaliseRow).filter(r => r.address || r.pin);
+      setPullStatus(`Got ${addrNorm.length} addresses from map selection. Fetching enrichment data…`);
+      setSelectedArea(`${zips.length} ZIP${zips.length > 1 ? "s" : ""} (map)`);
+      await finishPull(addrNorm);
+    } catch (e) {
+      console.error("Map pull error:", e);
+      setPullError(e.message || "Failed to fetch data from Cook County API.");
+    }
+    setPulling(false);
+  };
+
+  // ── Map zip toggle ────────────────────────────────────────────────────────────
+  const onZipToggle = zip =>
+    setSelectedZips(prev => prev.includes(zip) ? prev.filter(z => z !== zip) : [...prev, zip]);
 
   // ── Manual CSV upload (fallback for Lake County / custom data) ──────────────
   const handleFile = e => {
@@ -526,13 +457,13 @@ export default function StormLeads() {
                 <input type="date" value={stormDate}
                   max={new Date().toISOString().slice(0,10)}
                   title="Leave blank for live alerts, or pick a past date for historical storm reports"
-                  onChange={e=>{setStormDate(e.target.value);setAlerts([]);setAlertsDone(false);setIsHistorical(false);}}
+                  onChange={e=>{setStormDate(e.target.value);setAlerts([]);setAlertsDone(false);setIsHistorical(false);setSelectedZips([]);}}
                   style={{fontSize:".75rem",padding:"5px 8px"}}
                 />
               </div>
               <div className="row" style={{marginBottom:12,gap:8}}>
                 {stormDate && (
-                  <button className="btn sm outline" onClick={()=>{setStormDate("");setAlerts([]);setAlertsDone(false);setIsHistorical(false);}}>
+                  <button className="btn sm outline" onClick={()=>{setStormDate("");setAlerts([]);setAlertsDone(false);setIsHistorical(false);setSelectedZips([]);}}>
                     ← Live
                   </button>
                 )}
@@ -696,6 +627,36 @@ export default function StormLeads() {
 
           {/* ── Pull Properties — merged into Storm tab ───────────────────── */}
           {tab==="storm" && <>
+
+            {/* ── Map view card ── */}
+            <div className="card" style={{padding:"12px 14px"}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+                <div className="lbl" style={{marginBottom:0}}>🗺 Map View</div>
+                <div className="row" style={{gap:6}}>
+                  {selectedZips.length > 0 && <>
+                    <span style={{fontSize:".65rem",color:"#fb923c",fontFamily:"'Bebas Neue',sans-serif",letterSpacing:".06em"}}>
+                      {selectedZips.length} ZIP{selectedZips.length>1?"s":""} selected
+                    </span>
+                    <button className="btn sm outline" onClick={()=>setSelectedZips([])}>Clear</button>
+                  </>}
+                  <button className="btn sm outline" onClick={()=>setShowMap(!showMap)}>
+                    {showMap ? "✕ Hide" : "Open Map"}
+                  </button>
+                </div>
+              </div>
+              {!showMap && (
+                <div style={{fontSize:".63rem",color:"#374151",marginTop:6,lineHeight:1.5}}>
+                  Click zip polygons to select storm-hit zones, then pull & score all properties within them — no dropdown needed.
+                </div>
+              )}
+              {showMap && (
+                <StormMap
+                  selectedZips={selectedZips}
+                  onZipToggle={onZipToggle}
+                  onFetch={pullByZips}
+                />
+              )}
+            </div>
 
             {/* Configure + Pull */}
             <div className="card" id="pull-card">
