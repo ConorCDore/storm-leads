@@ -182,8 +182,11 @@ export default function StormLeads() {
   const [weights,        setWeights]        = useState({...DEFAULT_WEIGHTS});
   const [pulledPins,     setPulledPins]     = useState(new Set());
   const [hwo,            setHwo]            = useState(null); // { hailMentioned, severeMentioned, summary }
-  const [stormDate,      setStormDate]      = useState("");   // "" = live; "YYYY-MM-DD" = historical
-  const [isHistorical,   setIsHistorical]   = useState(false);
+  const [dateMode,       setDateMode]       = useState("live");  // "live" | "quick" | "range"
+  const [quickDays,      setQuickDays]      = useState(1);       // 1 = yesterday, 3, 7
+  const [dateFrom,       setDateFrom]       = useState("");      // "YYYY-MM-DD" range start
+  const [dateTo,         setDateTo]         = useState("");      // "YYYY-MM-DD" range end
+  const [hardHitOnly,    setHardHitOnly]    = useState(false);   // filter dropdown to MODERATE/SEVERE areas
   const [stormHistory,   setStormHistory]   = useState({});  // area label → storm day count (5yr)
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [minHailSize,    setMinHailSize]    = useState(0);   // 0 = no filter
@@ -204,6 +207,11 @@ export default function StormLeads() {
   }, []);
 
   // Derived
+  const isHistorical   = dateMode !== "live";
+  const today          = new Date().toISOString().slice(0, 10);
+  const stormDateLabel = dateMode === "live"  ? ""
+    : dateMode === "quick" ? (quickDays === 1 ? "Yesterday" : `Past ${quickDays} Days`)
+    : (dateFrom && dateTo  ? `${dateFrom} – ${dateTo}` : dateFrom || "");
   const area = AREA_MAP.find(a => a.label === selectedArea);
 
   // ── Storm history wrapper — delegates to util, manages loading state ──────────
@@ -221,14 +229,23 @@ export default function StormLeads() {
     setFetchingAlerts(true);
     setAlerts([]);
     try {
-      if (stormDate) {
-        setAlerts(await fetchHistoricalAlerts(stormDate));
-        setIsHistorical(true);
-      } else {
+      if (dateMode === "live") {
         const [liveAlerts, hwoResult] = await Promise.all([fetchLiveAlerts(), fetchHWO()]);
         setAlerts(liveAlerts);
         setHwo(hwoResult);
-        setIsHistorical(false);
+      } else {
+        // Compute from/to dates for quick or range modes
+        let from, to;
+        if (dateMode === "quick") {
+          const todayD = new Date();
+          to   = new Date(todayD); to.setDate(to.getDate() - 1);                    // yesterday
+          from = new Date(to);    from.setDate(from.getDate() - (quickDays - 1));   // e.g. 3 days back
+        } else {
+          from = new Date(dateFrom + "T12:00:00");
+          to   = new Date(dateTo   + "T12:00:00");
+        }
+        const fmt = d => d.toISOString().slice(0, 10);
+        setAlerts(await fetchHistoricalAlerts(fmt(from), fmt(to)));
       }
     } catch { setAlerts([]); }
     setAlertsDone(true);
@@ -415,6 +432,14 @@ export default function StormLeads() {
   const sevCls   = s => s==="Extreme"?"ex":s==="Severe"?"sv":s==="Moderate"?"md":"mn";
   const sevColor = s => s==="Extreme"?"#ef4444":s==="Severe"?"#f97316":"#fb923c";
 
+  // Compound exposure badge — requires both current hit AND storm history
+  const getExposureBadge = (areaName, pts) => {
+    const hist = stormHistory[areaName] || 0;
+    if (pts === 3 && hist >= 3) return { label: "🔥 High Exposure", color: "#ef4444", bg: "rgba(239,68,68,.12)" };
+    if (pts >= 2 && hist >= 2) return { label: "⚡ Repeat Target", color: "#fb923c", bg: "rgba(251,146,60,.12)" };
+    return null;
+  };
+
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
       <div className="app">
@@ -451,7 +476,7 @@ export default function StormLeads() {
               leads={leads}
               stormHistory={stormHistory}
               isHistorical={isHistorical}
-              stormDate={stormDate}
+              stormDate={stormDateLabel}
               setTab={setTab}
             />
           )}
@@ -459,34 +484,77 @@ export default function StormLeads() {
           {/* ── STORM TAB ─────────────────────────────────────────────────── */}
           {tab==="storm" && <>
             <div className="card">
-              <div className="lbl">{isHistorical ? `Ground Reports — ${stormDate}` : "NWS Active Alerts — Illinois"}</div>
+              <div className="lbl">{isHistorical ? `Ground Reports — ${stormDateLabel}` : "NWS Active Alerts — Illinois"}</div>
 
-              {/* Date picker row */}
-              <div className="row" style={{marginBottom:8,gap:8,flexWrap:"wrap"}}>
-                <span style={{fontSize:".7rem",color:"#4b5563",flex:1}}>Cook · DuPage · Lake · Will Counties</span>
-                <input type="date" value={stormDate}
-                  max={new Date().toISOString().slice(0,10)}
-                  title="Leave blank for live alerts, or pick a past date for historical storm reports"
-                  onChange={e=>{setStormDate(e.target.value);setAlerts([]);setAlertsDone(false);setIsHistorical(false);setSelectedZips([]);}}
-                  style={{fontSize:".75rem",padding:"5px 8px"}}
-                />
-              </div>
-              <div className="row" style={{marginBottom:12,gap:8}}>
-                {stormDate && (
-                  <button className="btn sm outline" onClick={()=>{setStormDate("");setAlerts([]);setAlertsDone(false);setIsHistorical(false);setSelectedZips([]);}}>
-                    ← Live
+              {/* Mode toggle — Live / Quick / Range */}
+              <div style={{display:"flex",gap:4,marginBottom:8}}>
+                {[["live","⚡ Live"],["quick","⏱ Quick"],["range","📅 Range"]].map(([m,l])=>(
+                  <button key={m}
+                    onClick={()=>{setDateMode(m);setAlerts([]);setAlertsDone(false);setSelectedZips([]);}}
+                    style={{
+                      flex:1, padding:"5px 8px", fontSize:".7rem",
+                      fontFamily:"'Bebas Neue',sans-serif", letterSpacing:".06em",
+                      border:"1px solid rgba(251,146,60,.25)", borderRadius:3, cursor:"pointer",
+                      background: dateMode===m ? "#fb923c" : "transparent",
+                      color:      dateMode===m ? "#080c10" : "#fb923c",
+                    }}>{l}
                   </button>
-                )}
-                <button className="btn" style={{flex:1,justifyContent:"center"}} onClick={fetchAlerts} disabled={fetchingAlerts}>
-                  {fetchingAlerts ? <><span className="sp"/>Fetching…</> : stormDate ? `Fetch Reports for ${stormDate}` : "Fetch Live Alerts"}
+                ))}
+              </div>
+
+              {/* Quick — preset day windows */}
+              {dateMode==="quick" && (
+                <div style={{display:"flex",gap:4,marginBottom:8}}>
+                  {[[1,"Yesterday"],[3,"Past 3 Days"],[7,"Past 7 Days"]].map(([d,l])=>(
+                    <button key={d} onClick={()=>setQuickDays(d)} style={{
+                      flex:1, padding:"4px 6px", fontSize:".68rem",
+                      fontFamily:"'Bebas Neue',sans-serif", letterSpacing:".05em",
+                      border:"1px solid rgba(251,146,60,.2)", borderRadius:3, cursor:"pointer",
+                      background: quickDays===d ? "rgba(251,146,60,.15)" : "transparent",
+                      color:      quickDays===d ? "#fb923c" : "#6b7280",
+                    }}>{l}</button>
+                  ))}
+                </div>
+              )}
+
+              {/* Range — custom From / To date inputs */}
+              {dateMode==="range" && (
+                <div className="grid2" style={{marginBottom:8}}>
+                  <div className="field">
+                    <div className="field-lbl">From</div>
+                    <input type="date" value={dateFrom} max={today}
+                      onChange={e=>{setDateFrom(e.target.value);setAlerts([]);setAlertsDone(false);}}
+                      style={{width:"100%"}}/>
+                  </div>
+                  <div className="field">
+                    <div className="field-lbl">To</div>
+                    <input type="date" value={dateTo} max={today} min={dateFrom||undefined}
+                      onChange={e=>{setDateTo(e.target.value);setAlerts([]);setAlertsDone(false);}}
+                      style={{width:"100%"}}/>
+                  </div>
+                </div>
+              )}
+
+              {/* Fetch button */}
+              <div className="row" style={{marginBottom:12,gap:8}}>
+                <button className="btn" style={{flex:1,justifyContent:"center"}} onClick={fetchAlerts}
+                  disabled={fetchingAlerts || (dateMode==="range" && (!dateFrom || !dateTo))}>
+                  {fetchingAlerts ? <><span className="sp"/>Fetching…</>
+                    : dateMode==="live"  ? "Fetch Live Alerts"
+                    : dateMode==="quick" ? `Fetch ${quickDays===1 ? "Yesterday" : `Past ${quickDays} Days`}`
+                    : "Fetch Date Range"}
                 </button>
               </div>
 
               {!alertsDone && (
                 <div style={{fontSize:".68rem",color:"#374151",lineHeight:1.6}}>
-                  {stormDate
-                    ? `Historical mode — will pull NOAA-verified ground reports (hail size, wind, tornadoes) for ${stormDate} from the Iowa Environmental Mesonet archive.`
-                    : "Pulls live NWS watches and warnings filtered to your 18 service areas. Severity feeds into lead scoring."}
+                  {dateMode==="live"
+                    ? "Pulls live NWS watches and warnings filtered to your 18 service areas. Severity feeds into lead scoring."
+                    : dateMode==="quick"
+                    ? `Historical mode — pulls NOAA-verified spotter reports (hail size, wind, tornadoes) from the IEM archive for the ${quickDays===1?"day":"last "+quickDays+" days"} prior to today.`
+                    : (dateFrom && dateTo)
+                    ? `Historical mode — ${dateFrom} through ${dateTo} from the IEM archive.`
+                    : "Select a From and To date to pull a custom storm window from the IEM archive."}
                 </div>
               )}
 
@@ -494,7 +562,7 @@ export default function StormLeads() {
                 <div className="empty" style={{padding:"18px 0"}}>
                   <div className="empty-ico">{isHistorical ? "📅" : "🌤"}</div>
                   {isHistorical
-                    ? <>No storm reports found for {stormDate}.<br/><span style={{fontSize:".66rem",color:"#374151"}}>Try an adjacent date — overnight events may fall on the next day.</span></>
+                    ? <>No storm reports found for {stormDateLabel}.<br/><span style={{fontSize:".66rem",color:"#374151"}}>Try an adjacent date — overnight events may fall on the next day.</span></>
                     : <>No active alerts for your service area.<br/><span style={{fontSize:".66rem",color:"#374151"}}>Pre-storm scoring still works.</span></>
                   }
                 </div>
@@ -518,7 +586,7 @@ export default function StormLeads() {
               {/* Historical mode: summary count instead of individual cards */}
               {isHistorical && alerts.length > 0 && (
                 <div style={{fontSize:".7rem",color:"#10b981",marginBottom:8,padding:"8px 10px",background:"rgba(16,185,129,.06)",border:"1px solid rgba(16,185,129,.15)",borderRadius:3}}>
-                  ✓ {alerts.length} verified storm reports for {stormDate}
+                  ✓ {alerts.length} verified storm reports for {stormDateLabel}
                   {alerts.filter(a=>a.properties.parameters?.hailSize).length > 0 &&
                     ` · ${alerts.filter(a=>a.properties.parameters?.hailSize).length} hail reports`}
                   {alerts.filter(a=>a.properties.event==="Tornado").length > 0 &&
@@ -549,7 +617,8 @@ export default function StormLeads() {
                   </div>
                   <div className="sev-grid">
                     {areaRanking.map(a => {
-                      const hits = stormHistory[a.name];
+                      const hits    = stormHistory[a.name];
+                      const expoBdg = getExposureBadge(a.name, a.pts);
                       return (
                         <div key={a.name} className={`sev-row s${a.pts}`}>
                           <span className="sev-name">{a.name}</span>
@@ -558,7 +627,17 @@ export default function StormLeads() {
                             {a.hail ? ` · ${a.hail}" hail` : ""}
                             {a.wind ? ` · ${a.wind} mph` : ""}
                           </span>
-                          {hits > 0 && (
+                          {expoBdg && (
+                            <span style={{
+                              fontSize:".58rem", color: expoBdg.color, background: expoBdg.bg,
+                              border:"1px solid currentColor", borderRadius:2, padding:"1px 6px",
+                              marginRight:4, whiteSpace:"nowrap", fontFamily:"'Bebas Neue',sans-serif",
+                              letterSpacing:".04em",
+                            }}>
+                              {expoBdg.label}
+                            </span>
+                          )}
+                          {!expoBdg && hits > 0 && (
                             <span style={{fontSize:".58rem",color: hits >= 4 ? "#ef4444" : hits >= 2 ? "#fb923c" : "#6b7280",
                               background: hits >= 4 ? "rgba(239,68,68,.1)" : hits >= 2 ? "rgba(251,146,60,.1)" : "rgba(255,255,255,.04)",
                               border:"1px solid currentColor",borderRadius:2,padding:"1px 5px",marginRight:4,whiteSpace:"nowrap"}}>
@@ -631,7 +710,7 @@ export default function StormLeads() {
             </div>
             <div className="note">
               <b>Live mode:</b> NOAA / National Weather Service — real-time warnings, no key required.<br/>
-              <b>Historical mode:</b> Iowa Environmental Mesonet archive — NOAA-verified spotter reports with exact hail size and wind speed, going back years. Pick any past date.
+              <b>Historical mode:</b> Iowa Environmental Mesonet archive — NOAA-verified spotter reports with exact hail size and wind speed. Use <b>Quick</b> for recent days or <b>Range</b> for a custom window (e.g. Feb 1 – Mar 15).
             </div>
           </>}
 
@@ -672,16 +751,40 @@ export default function StormLeads() {
 
             {/* Configure + Pull */}
             <div className="card" id="pull-card">
-              <div className="lbl">Pull Properties</div>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                <div className="lbl" style={{marginBottom:0}}>Pull Properties</div>
+                {areaRanking.length > 0 && (
+                  <button
+                    onClick={()=>setHardHitOnly(h=>!h)}
+                    title="Show only areas with MODERATE or SEVERE current alerts"
+                    style={{
+                      padding:"4px 10px", fontSize:".65rem", borderRadius:3, cursor:"pointer",
+                      fontFamily:"'Bebas Neue',sans-serif", letterSpacing:".06em",
+                      border:"1px solid rgba(239,68,68,.35)",
+                      background: hardHitOnly ? "rgba(239,68,68,.15)" : "transparent",
+                      color: hardHitOnly ? "#ef4444" : "#6b7280",
+                    }}>
+                    🔥 {hardHitOnly ? "Hard Hit Only ✓" : "Hard Hit Only"}
+                  </button>
+                )}
+              </div>
               <div className="grid2" style={{marginBottom:8}}>
                 <div className="field">
                   <span className="field-lbl">Service Area</span>
                   <select value={selectedArea} onChange={e=>{setSelectedArea(e.target.value);setRows([]);setLeads([]);setPullError("");}}>
                     <optgroup label="Cook County (auto-pull)">
-                      {COOK_AREAS.map(a=><option key={a.label}>{a.label}</option>)}
+                      {COOK_AREAS
+                        .filter(a => !hardHitOnly || (areaSeverity[a.label]?.pts ?? 0) >= 2)
+                        .map(a => {
+                          const pts = areaSeverity[a.label]?.pts ?? 0;
+                          const suffix = pts === 3 ? " 🔴" : pts === 2 ? " 🟡" : "";
+                          return <option key={a.label} value={a.label}>{a.label}{suffix}</option>;
+                        })}
                     </optgroup>
                     <optgroup label="Lake County (upload CSV)">
-                      {OTHER_AREAS.map(a=><option key={a.label}>{a.label}</option>)}
+                      {OTHER_AREAS
+                        .filter(a => !hardHitOnly || (areaSeverity[a.label]?.pts ?? 0) >= 2)
+                        .map(a => <option key={a.label}>{a.label}</option>)}
                     </optgroup>
                   </select>
                 </div>

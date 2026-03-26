@@ -5,14 +5,15 @@ const NWS_HEADERS = { "User-Agent": "(StormLeads, storm-leads-app)" };
 
 // ── IEM Historical Local Storm Reports ───────────────────────────────────────
 // Returns IEM LSR features already converted to synthetic NWS alert shape.
-export async function fetchHistoricalAlerts(dateStr) {
-  const d    = new Date(dateStr + "T12:00:00");
-  const next = new Date(d); next.setDate(next.getDate() + 1);
+export async function fetchHistoricalAlerts(dateFrom, dateTo) {
+  const from = new Date(dateFrom + "T12:00:00");
+  const to   = new Date(dateTo   + "T12:00:00");
+  const end  = new Date(to); end.setDate(end.getDate() + 1); // exclusive end date
   const pad  = n => String(n).padStart(2, "0");
   const url  =
     `https://mesonet.agron.iastate.edu/geojson/lsr.geojson` +
-    `?syear=${d.getFullYear()}&smonth=${pad(d.getMonth()+1)}&sday=${pad(d.getDate())}` +
-    `&eyear=${next.getFullYear()}&emonth=${pad(next.getMonth()+1)}&eday=${pad(next.getDate())}` +
+    `?syear=${from.getFullYear()}&smonth=${pad(from.getMonth()+1)}&sday=${pad(from.getDate())}` +
+    `&eyear=${end.getFullYear()}&emonth=${pad(end.getMonth()+1)}&eday=${pad(end.getDate())}` +
     `&wfo=LOT`;
   const res  = await fetch(url);
   if (!res.ok) throw new Error(`IEM API returned ${res.status}`);
