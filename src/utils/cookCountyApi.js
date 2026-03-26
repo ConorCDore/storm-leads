@@ -6,6 +6,7 @@
 //   bcnq-qi2z  Building      — pin, class, age (years old), bldg_sf
 //   x54s-btds  Chars (roof)  — pin, char_roof_cnst (material code)
 //   6yjf-dfxs  Permits       — pin, date_issued, work_description
+//   wvhk-k5uv  Sales         — pin, sale_date, sale_price, buyer_name
 
 const BASE      = "https://datacatalog.cookcountyil.gov/resource";
 const PIN_BATCH = 100; // Socrata WHERE IN limit per request
@@ -48,8 +49,9 @@ export async function enrichAddresses(addrNorm, onStatus = () => {}) {
   const bldgMap   = new Map();
   const roofMap   = new Map();
   const permitMap = new Map();
+  const saleMap   = new Map();
 
-  // Build parallel fetches — 4 requests per PIN batch
+  // Build parallel fetches — 5 requests per PIN batch
   const fetches = [];
   for (let i = 0; i < pins.length; i += PIN_BATCH) {
     const pinList = pins.slice(i, i + PIN_BATCH).map(p => `'${p}'`).join(",");
@@ -67,10 +69,13 @@ export async function enrichAddresses(addrNorm, onStatus = () => {}) {
       // 3: Permits — most recent roofing permit per PIN
       fetch(`${BASE}/6yjf-dfxs.json?$where=${encodeURIComponent(`pin in(${pinList}) AND upper(work_description) like '%ROOF%'`)}&$select=pin,date_issued&$order=date_issued DESC&$limit=${PIN_BATCH}`)
         .catch(() => null),
+      // 4: Sales — most recent sale per PIN
+      fetch(`${BASE}/wvhk-k5uv.json?$where=${encodeURIComponent(`pin in(${pinList})`)}&$select=pin,sale_date,sale_price,buyer_name&$order=sale_date DESC&$limit=${PIN_BATCH}`)
+        .catch(() => null),
     );
   }
 
-  onStatus(`Fetching details for ${pins.length} properties (4 datasets)…`);
+  onStatus(`Fetching details for ${pins.length} properties (5 datasets)…`);
   const results = await Promise.all(fetches);
 
   // Process results — 4 per batch group: assess[0] bldg[1] roof[2] permit[3]
@@ -78,7 +83,7 @@ export async function enrichAddresses(addrNorm, onStatus = () => {}) {
     const res = results[i];
     if (!res?.ok) continue;
     const data = await res.json();
-    const idx  = i % 4;
+    const idx  = i % 5;
     if (idx === 0) {
       for (const r of data) assessMap.set(r.pin, { cls: r.class || "", value: r.certified_tot || "" });
     } else if (idx === 1) {
@@ -91,11 +96,21 @@ export async function enrichAddresses(addrNorm, onStatus = () => {}) {
         const raw = String(r.char_roof_cnst || "").trim();
         if (raw) roofMap.set(r.pin, raw);
       }
-    } else {
+    } else if (idx === 3) {
       for (const r of data) {
         if (!permitMap.has(r.pin) && r.date_issued) {
           const yr = new Date(r.date_issued).getFullYear();
           if (yr > 1900) permitMap.set(r.pin, yr);
+        }
+      }
+    } else if (idx === 4) {
+      for (const r of data) {
+        if (!saleMap.has(r.pin) && r.sale_date) {
+          saleMap.set(r.pin, {
+            saleDate : r.sale_date,
+            salePrice: parseFloat(r.sale_price) || 0,
+            buyerName: r.buyer_name || ""
+          });
         }
       }
     }
@@ -105,6 +120,7 @@ export async function enrichAddresses(addrNorm, onStatus = () => {}) {
   const merged = addrNorm.map(r => {
     const assess = r.pin ? assessMap.get(r.pin) : null;
     const bldg   = r.pin ? bldgMap.get(r.pin)   : null;
+    const sale   = r.pin ? saleMap.get(r.pin)   : null;
     return {
       ...r,
       year          : r.year  || bldg?.year   || "",
@@ -112,6 +128,9 @@ export async function enrichAddresses(addrNorm, onStatus = () => {}) {
       cls           : r.cls   || assess?.cls   || bldg?.cls || "",
       roofMaterial  : (r.pin && roofMap.get(r.pin))   || "",
       lastPermitYear: (r.pin && permitMap.get(r.pin))  || "",
+      saleDate      : sale?.saleDate || "",
+      salePrice     : sale?.salePrice || 0,
+      buyerName     : sale?.buyerName || "",
     };
   });
 
@@ -120,5 +139,62 @@ export async function enrichAddresses(addrNorm, onStatus = () => {}) {
     matchCount : merged.filter(r => r.year || r.value || r.cls).length,
     roofCount  : merged.filter(r => r.roofMaterial).length,
     permitCount: merged.filter(r => r.lastPermitYear).length,
+    saleCount  : merged.filter(r => r.saleDate).length,
   };
+}
+
+// ── Motivation Classifier ─────────────────────────────────────────────────────
+export function classifyMotivation(row) {
+  const reasons = [];
+  let tier = "STANDARD";
+  let label = "";
+
+  const ownerName = row.ownerName || "";
+  const saleDate = row.saleDate || "";
+  const salePrice = parseFloat(row.salePrice) || 0;
+  const value = parseFloat(row.value) || 0;
+  const city = (row.city || "").toUpperCase();
+
+  const now = new Date();
+  const saleDateObj = saleDate ? new Date(saleDate) : null;
+  const monthsSinceSale = saleDateObj ? (now - saleDateObj) / (1000 * 60 * 60 * 24 * 30.44) : 999;
+
+  // 1. INVESTOR
+  const investorKeywords = ["LLC", "CORP", "INC", "TRUST", "HOLDINGS", "REIT", "PROPERTIES", "INVESTMENTS", "REALTY", "PARTNERS", "VENTURES"];
+  const isInvestor = investorKeywords.some(k => ownerName.toUpperCase().includes(k));
+
+  // 2. FLIPPER
+  // bought at <80% of estimated market value (AV * 3.3) within last 12 months
+  const estMarketValue = value * 3.3;
+  const isFlipper = monthsSinceSale <= 12 && salePrice > 0 && estMarketValue > 0 && salePrice < (estMarketValue * 0.80);
+
+  // 3. RECENT_BUYER
+  const isRecentBuyer = monthsSinceSale <= 18;
+
+  // 4. ABSENTEE
+  // ownerName is present but doesn't match any word in the property's city name, AND saleDate is not recent
+  const cityWords = city.split(/[\s,]+/).filter(w => w.length > 2);
+  const ownerMatchesCity = cityWords.length > 0 && cityWords.some(w => ownerName.toUpperCase().includes(w));
+  const isAbsentee = ownerName && !ownerMatchesCity && monthsSinceSale > 18;
+
+  if (isInvestor) {
+    tier = "INVESTOR";
+    label = "Investor / LLC";
+    reasons.push(`Owner: ${ownerName}`);
+  } else if (isFlipper) {
+    tier = "FLIPPER";
+    label = "Recent Flip";
+    reasons.push(`Sold ${Math.round(monthsSinceSale)} months ago · $${salePrice.toLocaleString()}`);
+    reasons.push(`Bought below market (est. ${Math.round((salePrice / estMarketValue) * 100)}% of AV×3.3)`);
+  } else if (isRecentBuyer) {
+    tier = "RECENT_BUYER";
+    label = "New Owner";
+    reasons.push(`Sold ${Math.round(monthsSinceSale)} months ago · $${salePrice.toLocaleString()}`);
+  } else if (isAbsentee) {
+    tier = "ABSENTEE";
+    label = "Absentee Owner";
+    reasons.push("Mailing address differs from property city");
+  }
+
+  return { tier, label, reasons };
 }

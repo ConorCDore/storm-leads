@@ -3,7 +3,7 @@ import { AREA_MAP, COOK_AREAS, OTHER_AREAS, STORM_EVENTS, DEFAULT_WEIGHTS, WEIGH
 import { parseCSV, normaliseRow } from "./utils/parsers";
 import { scoreProperty, filterByValue } from "./utils/scoring";
 import { fetchHistoricalAlerts, fetchLiveAlerts, fetchHWO, fetchStormHistory as fetchStormHistoryApi } from "./utils/stormApi";
-import { fetchAddressesByCity, fetchAddressesByZip, enrichAddresses } from "./utils/cookCountyApi";
+import { fetchAddressesByCity, fetchAddressesByZip, enrichAddresses, classifyMotivation } from "./utils/cookCountyApi";
 import Dashboard  from "./components/Dashboard";
 import Settings   from "./components/Settings";
 import LeadsGrid  from "./components/LeadsGrid";
@@ -134,9 +134,15 @@ const CSS = `
   .lead-sum { font-size:.62rem; color:#fb923c; margin-top:4px; font-style:italic; line-height:1.4; opacity:.85; }
 
   /* Storm event badges on lead cards */
-  .storm-badge { font-family:'Bebas Neue',sans-serif; font-size:.58rem; letter-spacing:.06em; padding:2px 6px; border-radius:2px; }
+  .storm-badge, .motiv-badge { font-family:'Bebas Neue',sans-serif; font-size:.58rem; letter-spacing:.06em; padding:2px 6px; border-radius:2px; }
   .storm-badge.hail { background:rgba(99,179,237,.12); color:#63b3ed; border:1px solid rgba(99,179,237,.2); }
   .storm-badge.wind { background:rgba(167,139,250,.12); color:#a78bfa; border:1px solid rgba(167,139,250,.2); }
+
+  /* Motivation badges */
+  .motiv-badge.investor { background:rgba(251,191,36,.12); color:#fbbf24; border:1px solid rgba(251,191,36,.25); }
+  .motiv-badge.flipper { background:rgba(239,68,68,.12); color:#ef4444; border:1px solid rgba(239,68,68,.25); }
+  .motiv-badge.recent { background:rgba(20,184,166,.12); color:#14b8a6; border:1px solid rgba(20,184,166,.25); }
+  .motiv-badge.absentee { background:rgba(139,92,246,.12); color:#8b5cf6; border:1px solid rgba(139,92,246,.25); }
 
   /* HWO Pre-Storm banner */
   .hwo-banner { background:rgba(251,146,60,.07); border:1px solid rgba(251,146,60,.3); border-radius:4px; padding:12px 14px; margin-top:10px; }
@@ -246,8 +252,10 @@ export default function StormLeads() {
     );
     setRows(filtered);
     const alertInfo = getAlertScore();
-    const scored = filtered.map(r => scoreProperty(r, alertInfo, weights, maxYear))
-      .sort((a, b) => b.score - a.score);
+    const scored = filtered.map(r => {
+      const scoredRow = scoreProperty(r, alertInfo, weights, maxYear);
+      return { ...scoredRow, motivation: classifyMotivation(r) };
+    }).sort((a, b) => b.score - a.score);
     setLeads(scored);
     setPulledPins(prev => new Set([...prev, ...newMerged.map(r => r.pin).filter(Boolean)]));
     setPullStatus(
@@ -394,8 +402,10 @@ export default function StormLeads() {
     if (!rows.length) return;
     const filtered = filterByValue(rows, minValue, maxValue);
     const alertInfo = getAlertScore();
-    const scored = filtered.map(r => scoreProperty(r, alertInfo, weights, maxYear))
-      .sort((a, b) => b.score - a.score);
+    const scored = filtered.map(r => {
+      const scoredRow = scoreProperty(r, alertInfo, weights, maxYear);
+      return { ...scoredRow, motivation: classifyMotivation(r) };
+    }).sort((a, b) => b.score - a.score);
     setLeads(scored);
     if (switchTab) setTab("leads");
   };

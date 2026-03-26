@@ -1,3 +1,4 @@
+import { useState, useMemo } from "react";
 import LeadCard from "./LeadCard";
 
 // ── LeadsGrid ─────────────────────────────────────────────────────────────────
@@ -16,6 +17,35 @@ export default function LeadsGrid({
   const hi = leads.filter(l => l.tier === "HIGH");
   const md = leads.filter(l => l.tier === "MEDIUM");
   const lo = leads.filter(l => l.tier === "LOW");
+  const motivatedCount = leads.filter(l => l.motivation?.tier !== "STANDARD").length;
+
+  const [mFilter, setMFilter] = useState("All");
+
+  // Filter logic
+  const filteredLeads = useMemo(() => {
+    if (mFilter === "All") return leads;
+    return leads.filter(l => l.motivation?.tier === mFilter);
+  }, [leads, mFilter]);
+
+  const filteredDisplay = useMemo(() => {
+    if (mFilter === "All") return displayLeads;
+    return displayLeads.filter(l => l.motivation?.tier === mFilter);
+  }, [displayLeads, mFilter]);
+
+  const fHi = filteredLeads.filter(l => l.tier === "HIGH");
+  const fMd = filteredLeads.filter(l => l.tier === "MEDIUM");
+  const fLo = filteredLeads.filter(l => l.tier === "LOW");
+
+  // Motivation pill stats
+  const mStats = useMemo(() => {
+    const counts = {
+      INVESTOR: leads.filter(l => l.motivation?.tier === "INVESTOR").length,
+      FLIPPER: leads.filter(l => l.motivation?.tier === "FLIPPER").length,
+      RECENT_BUYER: leads.filter(l => l.motivation?.tier === "RECENT_BUYER").length,
+      ABSENTEE: leads.filter(l => l.motivation?.tier === "ABSENTEE").length,
+    };
+    return counts;
+  }, [leads]);
 
   // ── CSV download ─────────────────────────────────────────────────────────────
   const exportCSV = () => {
@@ -43,7 +73,7 @@ export default function LeadsGrid({
   return (
     <>
       {/* ── Stats row ── */}
-      <div className="stats">
+      <div className="stats" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
         <div className="stat">
           <div className="stat-n" style={{ color: "#ef4444" }}>{hi.length}</div>
           <div className="stat-l">High</div>
@@ -55,6 +85,10 @@ export default function LeadsGrid({
         <div className="stat">
           <div className="stat-n" style={{ color: "#4b5563" }}>{lo.length}</div>
           <div className="stat-l">Low</div>
+        </div>
+        <div className="stat">
+          <div className="stat-n" style={{ color: "#fbbf24" }}>{motivatedCount}</div>
+          <div className="stat-l">Motivated</div>
         </div>
       </div>
 
@@ -97,6 +131,40 @@ export default function LeadsGrid({
         </div>
       </div>
 
+      {/* ── Motivation Filter row ── */}
+      <div className="row" style={{ marginBottom: 14, gap: 5 }}>
+        <button 
+          onClick={() => setMFilter("All")}
+          style={{
+            padding: "4px 10px", fontSize: ".65rem", borderRadius: 12, border: "1px solid rgba(255,255,255,.1)",
+            background: mFilter === "All" ? "rgba(255,255,255,.1)" : "transparent",
+            color: mFilter === "All" ? "#fff" : "#6b7280", cursor: "pointer"
+          }}
+        >
+          All
+        </button>
+        {[
+          ["INVESTOR", "🏢 Investor"],
+          ["FLIPPER", "🔄 Flipper"],
+          ["RECENT_BUYER", "🔑 New Owner"],
+          ["ABSENTEE", "📬 Absentee"]
+        ].map(([tier, label]) => (
+          mStats[tier] > 0 && (
+            <button 
+              key={tier}
+              onClick={() => setMFilter(tier)}
+              style={{
+                padding: "4px 10px", fontSize: ".65rem", borderRadius: 12, border: "1px solid rgba(255,255,255,.1)",
+                background: mFilter === tier ? "rgba(251,146,60,.12)" : "transparent",
+                color: mFilter === tier ? "#fb923c" : "#6b7280", cursor: "pointer"
+              }}
+            >
+              {label} ({mStats[tier]})
+            </button>
+          )
+        ))}
+      </div>
+
       {/* Route mode hint */}
       {sortMode === "route" && (
         <div style={{
@@ -110,9 +178,9 @@ export default function LeadsGrid({
 
       {/* ── Lead list ── */}
       {sortMode === "route" ? (
-        displayLeads.map((l, i) => <LeadCard key={i} lead={l} />)
+        filteredDisplay.map((l, i) => <LeadCard key={i} lead={l} />)
       ) : (
-        [["HIGH", hi, "hi", "🔴"], ["MEDIUM", md, "md", "🟡"], ["LOW", lo, "lo", "🟢"]].map(
+        [["HIGH", fHi, "hi", "🔴"], ["MEDIUM", fMd, "md", "🟡"], ["LOW", fLo, "lo", "🟢"]].map(
           ([tier, list, cls, ico]) =>
             list.length > 0 && (
               <div key={tier}>

@@ -25,11 +25,16 @@ export default function LeadCard({ lead }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="lead-addr" title={lead.address}>{lead.address}</div>
 
-          {/* Storm event badges */}
-          {(hasHail || hasWind) && (
+          {/* Badge row */}
+          {(hasHail || hasWind || lead.motivation?.tier !== "STANDARD") && (
             <div style={{ display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" }}>
               {hasHail && <span className="storm-badge hail">🌨 HAIL</span>}
               {hasWind && <span className="storm-badge wind">💨 HIGH WIND</span>}
+              
+              {lead.motivation?.tier === "INVESTOR" && <span className="motiv-badge investor">🏢 INVESTOR</span>}
+              {lead.motivation?.tier === "FLIPPER" && <span className="motiv-badge flipper">🔄 FLIPPER</span>}
+              {lead.motivation?.tier === "RECENT_BUYER" && <span className="motiv-badge recent">🔑 NEW OWNER</span>}
+              {lead.motivation?.tier === "ABSENTEE" && <span className="motiv-badge absentee">📬 ABSENTEE</span>}
             </div>
           )}
 
@@ -105,6 +110,17 @@ export default function LeadCard({ lead }) {
           ) : (
             <div style={{ fontSize: ".63rem", color: "#6b7280", lineHeight: 1.6 }}>
               {lead.reason}
+            </div>
+          )}
+
+          {/* Motivation reasons */}
+          {lead.motivation?.reasons?.length > 0 && (
+            <div style={{ 
+              marginTop: 8, paddingTop: 8, 
+              borderTop: "1px solid rgba(255,255,255,.03)",
+              fontSize: ".62rem", color: "#6b7280", fontStyle: "italic" 
+            }}>
+              {lead.motivation.reasons.join(" · ")}
             </div>
           )}
         </div>
