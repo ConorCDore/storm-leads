@@ -1,30 +1,18 @@
 import { AREA_MAP, STORM_EVENTS } from "../constants";
-import { lsrToAlert } from "./parsers";
+import { lsrToAlert, getDistance } from "./parsers";
 
 const NWS_HEADERS = { "User-Agent": "(StormLeads, storm-leads-app)" };
 
 // ── IEM Historical Local Storm Reports ───────────────────────────────────────
 // Returns IEM LSR features already converted to synthetic NWS alert shape.
 export async function fetchHistoricalAlerts(dateFrom, dateTo) {
-  const from = new Date(dateFrom + "T12:00:00");
-  const to   = new Date(dateTo   + "T12:00:00");
-  const end  = new Date(to); end.setDate(end.getDate() + 1); // exclusive end date
-  const pad  = n => String(n).padStart(2, "0");
-  const url  =
-    `https://mesonet.agron.iastate.edu/geojson/lsr.geojson` +
-    `?syear=${from.getFullYear()}&smonth=${pad(from.getMonth()+1)}&sday=${pad(from.getDate())}` +
-    `&eyear=${end.getFullYear()}&emonth=${pad(end.getMonth()+1)}&eday=${pad(end.getDate())}` +
-    `&wfo=LOT`;
+  const sts = `${dateFrom}T00:00Z`;
+  const ets = `${dateTo}T23:59Z`;
+  const url = `https://mesonet.agron.iastate.edu/geojson/lsr.php?sts=${sts}&ets=${ets}&wfos=LOT,ILX`;
   const res  = await fetch(url);
   if (!res.ok) throw new Error(`IEM API returned ${res.status}`);
   const json = await res.json();
-  return (json.features || [])
-    .filter(f => {
-      const st = (f.properties?.state  || "").toUpperCase();
-      const co = (f.properties?.county || "").toUpperCase();
-      return st === "IL" && ["COOK","DUPAGE","LAKE","WILL"].some(c => co.includes(c));
-    })
-    .map(lsrToAlert);
+  return (json.features || []).map(lsrToAlert).filter(a => a !== null);
 }
 
 // ── NWS Live Alerts ───────────────────────────────────────────────────────────
@@ -79,12 +67,9 @@ export async function fetchHWO() {
 export async function fetchStormHistory() {
   const now  = new Date();
   const then = new Date(now); then.setFullYear(now.getFullYear() - 5);
-  const pad  = n => String(n).padStart(2, "0");
-  const url  =
-    `https://mesonet.agron.iastate.edu/geojson/lsr.geojson` +
-    `?syear=${then.getFullYear()}&smonth=${pad(then.getMonth()+1)}&sday=${pad(then.getDate())}` +
-    `&eyear=${now.getFullYear()}&emonth=${pad(now.getMonth()+1)}&eday=${pad(now.getDate())}` +
-    `&wfo=LOT`;
+  const sts = then.toISOString().split(".")[0] + "Z";
+  const ets = now.toISOString().split(".")[0] + "Z";
+  const url = `https://mesonet.agron.iastate.edu/geojson/lsr.php?sts=${sts}&ets=${ets}&wfos=LOT,ILX`;
   const res  = await fetch(url);
   if (!res.ok) throw new Error(`IEM ${res.status}`);
   const json = await res.json();
@@ -100,19 +85,22 @@ export async function fetchStormHistory() {
 
     const type = (p.typetext || "").toUpperCase();
     const mag  = parseFloat(p.magnitude) || 0;
-    if (type.includes("HAIL") && mag < 0.75) continue;
-    if (type.includes("WIND") && !type.includes("TORNADO") && mag < 45) continue;
-    if (!type.includes("HAIL") && !type.includes("WIND") && !type.includes("TORNADO")) continue;
+    const isHail    = type.includes("HAIL");
+    const isWind    = type.includes("WIND") || type.includes("WND") || type.includes("TSTM");
+    const isTornado = type.includes("TORNADO");
 
-    const city    = (p.city || "").toUpperCase();
+    if (!isHail && !isWind && !isTornado) continue;
+    if (isHail && mag > 0 && mag < 0.75) continue;
+    if (isWind && !isTornado && mag > 0 && mag < 45) continue;
+
+    const coords = f.geometry?.coordinates || [0, 0];
+    const [lon, lat] = coords;
     const dateKey = (p.valid || "").slice(0, 10);
 
     for (const a of AREA_MAP) {
-      if (
-        (a.city && city.includes(a.city)) ||
-        city.includes(a.label.toUpperCase()) ||
-        a.label.toUpperCase().split(" ").some(w => w.length > 3 && city.includes(w))
-      ) {
+      if (!a.lat || !a.lon) continue;
+      const dist = getDistance(lat, lon, a.lat, a.lon);
+      if (dist <= 5) {
         hitDays[a.label].add(dateKey);
       }
     }
