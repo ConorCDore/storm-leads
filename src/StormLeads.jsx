@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, lazy, Suspense } from "react";
 import { AREA_MAP, COOK_AREAS, OTHER_AREAS, STORM_EVENTS, DEFAULT_WEIGHTS, WEIGHT_LABELS } from "./constants";
 import { parseCSV, normaliseRow } from "./utils/parsers";
 import { scoreProperty, filterByValue } from "./utils/scoring";
@@ -7,7 +7,7 @@ import { fetchAddressesByCity, fetchAddressesByZip, enrichAddresses } from "./ut
 import Dashboard  from "./components/Dashboard";
 import Settings   from "./components/Settings";
 import LeadsGrid  from "./components/LeadsGrid";
-import StormMap   from "./components/StormMap";
+const StormMap = lazy(() => import("./components/StormMap"));
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 // Fonts loaded via <link> in index.html (preconnect + non-blocking)
@@ -650,11 +650,13 @@ export default function StormLeads() {
                 </div>
               )}
               {showMap && (
-                <StormMap
-                  selectedZips={selectedZips}
-                  onZipToggle={onZipToggle}
-                  onFetch={pullByZips}
-                />
+                <Suspense fallback={<div style={{padding:"24px",textAlign:"center",color:"#fb923c",fontFamily:"'Bebas Neue',sans-serif",letterSpacing:".1em"}}>Loading Map…</div>}>
+                  <StormMap
+                    selectedZips={selectedZips}
+                    onZipToggle={onZipToggle}
+                    onFetch={pullByZips}
+                  />
+                </Suspense>
               )}
             </div>
 
