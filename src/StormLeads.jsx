@@ -69,6 +69,16 @@ function lsrToAlert(feature) {
   return { properties: { event, severity, areaDesc, parameters: params } };
 }
 
+// ── Roof material inference — fallback when Cook County has no data ────────────
+// Coverage is ~11% due to inspection cycle gaps; inference fills the rest.
+// Labels include "(est.)" so operator knows what's verified vs inferred.
+function inferRoofMaterial(yr) {
+  if (!yr || yr <= 0) return { score: 1, label: "Roof type unknown" };
+  if (yr < 1960)  return { score: 2, label: "Est. built-up/flat roof" };
+  if (yr < 2005)  return { score: 3, label: "Est. asphalt shingle" };
+  return { score: 2, label: "Est. architectural shingle" };
+}
+
 // ── CSV parser ────────────────────────────────────────────────────────────────
 function parseCSV(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
@@ -268,6 +278,7 @@ export default function StormLeads() {
   const [copied,         setCopied]         = useState(false);
   const [weights,        setWeights]        = useState({...DEFAULT_WEIGHTS});
   const [showWeights,    setShowWeights]    = useState(false);
+  const [pulledPins,     setPulledPins]     = useState(new Set());
   const [hwo,            setHwo]            = useState(null); // { hailMentioned, severeMentioned, summary }
   const [stormDate,      setStormDate]      = useState("");   // "" = live; "YYYY-MM-DD" = historical
   const [isHistorical,   setIsHistorical]   = useState(false);
@@ -415,9 +426,9 @@ export default function StormLeads() {
           fetch(`https://datacatalog.cookcountyil.gov/resource/bcnq-qi2z.json` +
             `?$where=${encodeURIComponent(`pin in(${pinList})`)}` +
             `&$select=pin,class,age,bldg_sf&$limit=${PIN_BATCH}`).catch(() => null),
-          // 2: Roof material (latest year only to avoid duplicates)
+          // 2: Roof material — NOT NULL filter squeezes max verified coverage from dataset
           fetch(`https://datacatalog.cookcountyil.gov/resource/x54s-btds.json` +
-            `?$where=${encodeURIComponent(`pin in(${pinList})`)}` +
+            `?$where=${encodeURIComponent(`pin in(${pinList}) AND char_roof_cnst IS NOT NULL AND char_roof_cnst != ''`)}` +
             `&$select=pin,char_roof_cnst&$order=year DESC&$limit=500`).catch(() => null),
           // 3: Permits (roofing)
           fetch(`https://datacatalog.cookcountyil.gov/resource/6yjf-dfxs.json` +
@@ -472,17 +483,35 @@ export default function StormLeads() {
         };
       });
 
-      const matchCount = merged.filter(r => r.year || r.value || r.cls).length;
-      const roofCount  = merged.filter(r => r.roofMaterial).length;
-      const permitCount= merged.filter(r => r.lastPermitYear).length;
-      const filtered = filterByValue(merged);
-      setPullStatus(`Enriched ${matchCount}/${addrNorm.length} (${roofCount} roof types, ${permitCount} permits)${filtered.length < merged.length ? ` → ${filtered.length} after value filter` : ""}. Scoring…`);
+      const matchCount  = merged.filter(r => r.year || r.value || r.cls).length;
+      const roofCount   = merged.filter(r => r.roofMaterial).length;
+      const roofEst     = merged.length - roofCount;
+      const permitCount = merged.filter(r => r.lastPermitYear).length;
+
+      // Duplicate suppression — filter PINs already scored in this session
+      const newMerged = merged.filter(r => !r.pin || !pulledPins.has(r.pin));
+      const dupCount  = merged.length - newMerged.length;
+
+      const filtered = filterByValue(newMerged);
+      setPullStatus(
+        `Enriched ${matchCount}/${addrNorm.length} · ` +
+        `Roof: ${roofCount} verified, ${roofEst} estimated · ` +
+        `${permitCount} permits` +
+        `${dupCount ? ` · ${dupCount} duplicates suppressed` : ""}` +
+        `${filtered.length < newMerged.length ? ` · ${newMerged.length - filtered.length} filtered by value` : ""}. Scoring…`
+      );
 
       setRows(filtered);
       const alertInfo = getAlertScore();
       const scored = filtered.map(r => scoreProperty(r, alertInfo)).sort((a, b) => b.score - a.score);
       setLeads(scored);
-      setPullStatus(`Done — ${scored.length} leads scored${filtered.length < merged.length ? ` (${merged.length - filtered.length} filtered out)` : ""}`);
+      // Register these PINs as pulled so re-pulls suppress duplicates
+      setPulledPins(prev => new Set([...prev, ...newMerged.map(r => r.pin).filter(Boolean)]));
+      setPullStatus(
+        `Done — ${scored.length} leads scored` +
+        `${dupCount ? ` · ${dupCount} duplicates suppressed` : ""}` +
+        `${filtered.length < newMerged.length ? ` · ${newMerged.length - filtered.length} filtered by value` : ""}`
+      );
       setTab("results");
     } catch (e) {
       console.error("Pull error:", e);
@@ -606,11 +635,20 @@ export default function StormLeads() {
     factors.stormSeverity = alertInfo.pts;
     if (alertInfo.pts > 0) reasons.push(alertInfo.label);
 
-    // Roof Material (0-3) — match keywords in Cook County's descriptive strings
+    // Roof Material (0-3) — verified Cook County data first, year-based inference fallback
     const mat = (r.roofMaterial || "").toLowerCase();
     const matScore = mat ? Object.entries(ROOF_VULN).reduce((best, [kw, s]) => mat.includes(kw) ? Math.max(best, s) : best, -1) : -1;
-    if (matScore >= 0) { factors.roofMaterial = matScore; reasons.push(`${r.roofMaterial}${matScore===0?" (durable)":""}`); }
-    else { factors.roofMaterial = 1; reasons.push("Roof type unknown"); }
+    let roofLabel = "";
+    if (matScore >= 0) {
+      factors.roofMaterial = matScore;
+      roofLabel = `${r.roofMaterial}${matScore===0?" (durable)":""}`;
+      reasons.push(`${roofLabel} ✓`);
+    } else {
+      const inf = inferRoofMaterial(yr);
+      factors.roofMaterial = inf.score;
+      roofLabel = inf.label + " (est.)";
+      reasons.push(roofLabel);
+    }
 
     // Permit History (0-3)
     const permitYr = parseInt(r.lastPermitYear);
@@ -632,8 +670,8 @@ export default function StormLeads() {
     // Plain-English lead summary
     const sumParts = [];
     if (yr > 0) sumParts.push(`${thisYear - yr}yr old`);
-    if (r.roofMaterial) sumParts.push(r.roofMaterial.toLowerCase() + " roof");
-    if (av > 0) sumParts.push(`~$${Math.round(av * 3.3 / 1000)}k home`);
+    if (roofLabel) sumParts.push(roofLabel.toLowerCase() + " roof");
+    if (av > 0) sumParts.push(`~$${Math.round(av * 3.3 / 1000)}k est. value`);
     if (permitYr && thisYear - permitYr > 15) sumParts.push(`roof permit expired ${permitYr}`);
     else if (!permitYr) sumParts.push("no roof permits on file");
     if (alertInfo.pts >= 2) sumParts.push("storm-impacted area");
@@ -641,7 +679,7 @@ export default function StormLeads() {
 
     const tier = score >= 7 ? "HIGH" : score >= 4 ? "MEDIUM" : "LOW";
     const address = [r.address, r.city, r.zip].filter(Boolean).join(", ") || r.pin || "unknown";
-    return { address, score, tier, reason: reasons.join(" · "), summary };
+    return { pin: r.pin || "", address, score, tier, reason: reasons.join(" · "), summary };
   };
 
   const scoreLeads = (switchTab = true) => {
@@ -991,7 +1029,8 @@ export default function StormLeads() {
 
             <div className="note">
               <b>Source:</b> Cook County Assessor open data — free, no account or API key needed.<br/>
-              <b>AV note:</b> Cook County assessed value ≈ 10% of market value ($100k AV ≈ $350k home).
+              <b>AV note:</b> Cook County assessed value ≈ 10% of market value. Values shown as "~$Xk est." on leads are rough estimates (AV × 3.3) — not appraisals.<br/>
+              <b>Roof material:</b> Verified data from county inspection records (~11% coverage). All others estimated from build year and flagged "(est.)" on lead cards.
             </div>
           </>}
 
@@ -1012,9 +1051,17 @@ export default function StormLeads() {
                 </div>
                 <div className="res-hd">
                   <div className="res-stat">{selectedArea} · {leads.length} leads</div>
-                  <button className={`btn${copied?" green":""}`} onClick={exportList}>
-                    {copied?"✓ Copied!":"Copy List"}
-                  </button>
+                  <div className="row" style={{gap:6}}>
+                    {pulledPins.size > 0 && (
+                      <button className="btn sm outline" title="Reset duplicate suppression — next pull will re-fetch all properties"
+                        onClick={()=>setPulledPins(new Set())}>
+                        Clear History
+                      </button>
+                    )}
+                    <button className={`btn${copied?" green":""}`} onClick={exportList}>
+                      {copied?"✓ Copied!":"Copy List"}
+                    </button>
+                  </div>
                 </div>
                 {/* Scoring Weights — on Results tab where operator can tune & re-score */}
                 <div className="card" style={{padding:"12px 14px",marginBottom:12}}>
