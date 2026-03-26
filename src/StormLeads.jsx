@@ -3,6 +3,8 @@ import { AREA_MAP, COOK_AREAS, OTHER_AREAS, STORM_EVENTS, DEFAULT_WEIGHTS, WEIGH
 import { parseCSV, normaliseRow } from "./utils/parsers";
 import { scoreProperty, filterByValue } from "./utils/scoring";
 import { fetchHistoricalAlerts, fetchLiveAlerts, fetchHWO, fetchStormHistory as fetchStormHistoryApi } from "./utils/stormApi";
+import Dashboard from "./components/Dashboard";
+import Settings  from "./components/Settings";
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 // Fonts loaded via <link> in index.html (preconnect + non-blocking)
@@ -149,7 +151,7 @@ const CSS = `
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function StormLeads() {
-  const [tab,            setTab]            = useState("storm");
+  const [tab,            setTab]            = useState("dashboard");
   const [alerts,         setAlerts]         = useState([]);
   const [fetchingAlerts, setFetchingAlerts] = useState(false);
   const [alertsDone,     setAlertsDone]     = useState(false);
@@ -165,7 +167,6 @@ export default function StormLeads() {
   const [pullError,      setPullError]      = useState("");
   const [copied,         setCopied]         = useState(false);
   const [weights,        setWeights]        = useState({...DEFAULT_WEIGHTS});
-  const [showWeights,    setShowWeights]    = useState(false);
   const [pulledPins,     setPulledPins]     = useState(new Set());
   const [hwo,            setHwo]            = useState(null); // { hailMentioned, severeMentioned, summary }
   const [stormDate,      setStormDate]      = useState("");   // "" = live; "YYYY-MM-DD" = historical
@@ -352,7 +353,7 @@ export default function StormLeads() {
         `${dupCount ? ` · ${dupCount} duplicates suppressed` : ""}` +
         `${filtered.length < newMerged.length ? ` · ${newMerged.length - filtered.length} filtered by value` : ""}`
       );
-      setTab("results");
+      setTab("leads");
     } catch (e) {
       console.error("Pull error:", e);
       setPullError(e.message || "Failed to fetch data from Cook County API.");
@@ -460,7 +461,7 @@ export default function StormLeads() {
     const scored = filtered.map(r => scoreProperty(r, alertInfo, weights, maxYear))
       .sort((a, b) => b.score - a.score);
     setLeads(scored);
-    if (switchTab) setTab("results");
+    if (switchTab) setTab("leads");
   };
 
   // ── Export ──────────────────────────────────────────────────────────────────
@@ -522,10 +523,25 @@ export default function StormLeads() {
 
           {/* Tabs */}
           <div className="tabs">
-            {[["storm","⚡ Storm"],["properties","🏠 Properties"],["results","📋 Leads"]].map(([k,l])=>(
+            {[["dashboard","⚡ Dash"],["storm","🗺 Storm"],["leads","📋 Leads"],["settings","⚙ Settings"]].map(([k,l])=>(
               <button key={k} className={`tab${tab===k?" on":""}`} onClick={()=>setTab(k)}>{l}</button>
             ))}
           </div>
+
+          {/* ── DASHBOARD TAB ─────────────────────────────────────────────── */}
+          {tab==="dashboard" && (
+            <Dashboard
+              alerts={alerts}
+              alertsDone={alertsDone}
+              hwo={hwo}
+              areaRanking={areaRanking}
+              leads={leads}
+              stormHistory={stormHistory}
+              isHistorical={isHistorical}
+              stormDate={stormDate}
+              setTab={setTab}
+            />
+          )}
 
           {/* ── STORM TAB ─────────────────────────────────────────────────── */}
           {tab==="storm" && <>
@@ -582,7 +598,7 @@ export default function StormLeads() {
                     No active warnings yet — get your leads scored and route planned tonight.
                     {hwo.summary && <div style={{color:"#6b7280",fontSize:".62rem",marginTop:4}}>{hwo.summary}</div>}
                   </div>
-                  <button className="btn sm" onClick={()=>setTab("properties")}>Pre-Rank Leads →</button>
+                  <button className="btn sm" onClick={()=>document.getElementById("pull-card")?.scrollIntoView({behavior:"smooth"})}>↓ Pull Properties</button>
                 </div>
               )}
 
@@ -669,7 +685,7 @@ export default function StormLeads() {
                   )}
                 </div>
               )}
-              {alertsDone && <button className="btn full" style={{marginTop:10}} onClick={()=>setTab("properties")}>Next: Get Properties →</button>}
+              {alertsDone && <button className="btn full" style={{marginTop:10}} onClick={()=>document.getElementById("pull-card")?.scrollIntoView({behavior:"smooth"})}>↓ Pull Properties Below</button>}
             </div>
             {/* Simulate storm for testing */}
             <div className="card" style={{borderColor:"rgba(239,68,68,.2)"}}>
@@ -706,11 +722,11 @@ export default function StormLeads() {
             </div>
           </>}
 
-          {/* ── PROPERTIES TAB ────────────────────────────────────────────── */}
-          {tab==="properties" && <>
+          {/* ── Pull Properties — merged into Storm tab ───────────────────── */}
+          {tab==="storm" && <>
 
             {/* Configure + Pull */}
-            <div className="card">
+            <div className="card" id="pull-card">
               <div className="lbl">Pull Properties</div>
               <div className="grid2" style={{marginBottom:8}}>
                 <div className="field">
@@ -870,13 +886,13 @@ export default function StormLeads() {
             </div>
           </>}
 
-          {/* ── RESULTS TAB ───────────────────────────────────────────────── */}
-          {tab==="results" && <>
+          {/* ── LEADS TAB ─────────────────────────────────────────────────── */}
+          {tab==="leads" && <>
             {!leads.length ? (
               <div className="empty">
                 <div className="empty-ico">📋</div>
                 No leads scored yet.<br/>
-                <span style={{fontSize:".7rem",color:"#374151"}}>Go to Properties and hit Pull & Score.</span>
+                <span style={{fontSize:".7rem",color:"#374151"}}>Go to Storm tab and hit Pull & Score.</span>
               </div>
             ) : (
               <>
@@ -916,28 +932,7 @@ export default function StormLeads() {
                     Route order: sorted by zip → street → house number for efficient canvassing. Tier badges preserved.
                   </div>
                 )}
-                {/* Scoring Weights — on Results tab where operator can tune & re-score */}
-                <div className="card" style={{padding:"12px 14px",marginBottom:12}}>
-                  <div className="row" style={{cursor:"pointer",marginBottom:showWeights?8:0}} onClick={()=>setShowWeights(!showWeights)}>
-                    <span className="lbl" style={{marginBottom:0,fontSize:".7rem"}}>Scoring Weights {showWeights?"▾":"▸"}</span>
-                    {!showWeights && <span style={{fontSize:".58rem",color:"#374151",marginLeft:"auto"}}>Tune ranking priorities & re-score</span>}
-                  </div>
-                  {showWeights && (
-                    <>
-                      {Object.entries(WEIGHT_LABELS).map(([key,label])=>(
-                        <div key={key} className="wt-row">
-                          <span className="wt-lbl">{label}</span>
-                          <input type="range" min={0} max={5} value={weights[key]} onChange={e=>setWeights(w=>({...w,[key]:+e.target.value}))}/>
-                          <span className="wt-val">{weights[key]}</span>
-                        </div>
-                      ))}
-                      <div className="row" style={{marginTop:6,gap:12}}>
-                        <button className="btn sm" onClick={()=>scoreLeads(false)}>Re-Score Leads</button>
-                        <span className="wt-reset" onClick={()=>setWeights({...DEFAULT_WEIGHTS})}>Reset defaults</span>
-                      </div>
-                    </>
-                  )}
-                </div>
+                {/* Weights moved to Settings tab */}
                 {sortMode === "route" ? (
                   // Route mode — flat list sorted geographically, tier shown as left-border color
                   displayLeads.map((l,i) => (
@@ -979,6 +974,16 @@ export default function StormLeads() {
               </>
             )}
           </>}
+
+          {/* ── SETTINGS TAB ──────────────────────────────────────────────── */}
+          {tab==="settings" && (
+            <Settings
+              weights={weights}
+              setWeights={setWeights}
+              leads={leads}
+              scoreLeads={scoreLeads}
+            />
+          )}
 
         </div>
       </div>
