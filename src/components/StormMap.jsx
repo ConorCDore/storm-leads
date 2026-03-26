@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, GeoJSON } from 'react-leaflet';
+import { MapContainer, TileLayer, GeoJSON, Marker, Popup } from 'react-leaflet';
+import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
 // Illinois statewide zip GeoJSON (Census TIGER via OpenDataDE)
@@ -23,7 +24,22 @@ const getZip = feature =>
     ""
   );
 
-const StormMap = ({ stormPolygon, selectedZips = [], onZipToggle, onFetch }) => {
+// ── Custom Map Pins ────────────────────────────────────────────────────────
+const createLeadIcon = (color) => L.divIcon({
+  className: 'sl-lead-pin',
+  html: `<div style="background:${color}; width:10px; height:10px; border-radius:50%; border:2px solid #fff; box-shadow: 0 0 6px ${color}"></div>`,
+  iconSize: [10, 10],
+  iconAnchor: [5, 5]
+});
+
+const reportIcon = L.divIcon({
+  className: 'sl-report-pin',
+  html: `<div style="font-size:14px; filter: drop-shadow(0 0 4px #fb923c)">🌩</div>`,
+  iconSize: [18, 18],
+  iconAnchor: [9, 9]
+});
+
+const StormMap = ({ stormPolygon, selectedZips = [], leads = [], stormReports = [], onZipToggle, onFetch, areaSeverity = {} }) => {
   const [zipData, setZipData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
@@ -46,11 +62,16 @@ const StormMap = ({ stormPolygon, selectedZips = [], onZipToggle, onFetch }) => 
   const zipStyle = feature => {
     const zip = getZip(feature);
     const isSelected = selectedZips.includes(zip);
+    
+    // Check if this zip corresponds to any hit areas in areaSeverity
+    // (Simplified: we check if any hit area label matches the zip tooltip if we had a mapping)
+    // For now, if the user focuses on a city, we'll highight that zone
+    
     return {
       fillColor:   isSelected ? '#fb923c' : '#1f2937',
-      fillOpacity: isSelected ? 0.7 : 0.35,
-      color:       '#374151',
-      weight:      1.5,
+      fillOpacity: isSelected ? 0.7 : 0.45,
+      color:       isSelected ? '#fb923c' : '#374151',
+      weight:      isSelected ? 2 : 1.5,
       opacity:     1,
     };
   };
@@ -161,6 +182,33 @@ const StormMap = ({ stormPolygon, selectedZips = [], onZipToggle, onFetch }) => 
             style={stormStyle}
           />
         )}
+
+        {/* Individual Storm Reports (precise damage locations) */}
+        {stormReports.map((r, i) => (
+          r.lat && r.lon && (
+            <Marker key={`rep-${i}`} position={[r.lat, r.lon]} icon={reportIcon}>
+              <Popup className="sl-popup">
+                <div style={{color:"#fb923c", fontWeight:"bold", fontSize:".8rem"}}>{r.event}</div>
+                <div style={{color:"#9ca3af", fontSize:".7rem"}}>{r.desc}</div>
+              </Popup>
+            </Marker>
+          )
+        ))}
+
+        {/* Individual Lead Pins */}
+        {leads.map((l, i) => (
+          l.lat && l.lon && (
+            <Marker key={`lead-${i}`} position={[l.lat, l.lon]} icon={createLeadIcon(l.tier === 'HIGH' ? '#ef4444' : '#fb923c')}>
+               <Popup className="sl-popup">
+                  <div style={{color:"#fff", fontWeight:"bold", fontSize:".8rem"}}>{l.address}</div>
+                  <div style={{fontSize:".7rem", color: l.tier==='HIGH'?'#ef4444':'#fb923c', fontFamily:"'Bebas Neue',sans-serif"}}>
+                    Score: {l.score}/10 · {l.motivation?.label || 'Prospect'}
+                  </div>
+                  <div style={{color:"#6b7280", marginTop:4, fontSize:".65rem", fontStyle:"italic"}}>{l.summary}</div>
+               </Popup>
+            </Marker>
+          )
+        ))}
       </MapContainer>
 
       {/* Fetch button — floats over map, only visible when zips are selected */}
@@ -199,6 +247,16 @@ const StormMap = ({ stormPolygon, selectedZips = [], onZipToggle, onFetch }) => 
         }
         .sl-zip-tooltip::before { display: none !important; }
         .leaflet-container { background: #080c10 !important; }
+        .sl-popup .leaflet-popup-content-wrapper {
+          background: #080c10 !important;
+          border: 1px solid rgba(251,146,60,0.3) !important;
+          color: #d4cfc8 !important;
+          font-family: 'DM Mono', monospace !important;
+          border-radius: 4px !important;
+          padding: 0 !important;
+        }
+        .sl-popup .leaflet-popup-tip { background: #080c10 !important; border: 1px solid rgba(251,146,60,0.3); }
+        .sl-popup .leaflet-popup-content { margin: 8px 12px 10px !important; width: auto !important; min-width: 140px; }
         @keyframes sl-spin { to { transform: rotate(360deg); } }
       `}</style>
     </div>

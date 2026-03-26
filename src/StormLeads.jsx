@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, lazy, Suspense } from "react";
-import { AREA_MAP, COOK_AREAS, OTHER_AREAS, STORM_EVENTS, DEFAULT_WEIGHTS, WEIGHT_LABELS } from "./constants";
+import { AREA_MAP, COOK_AREAS, OTHER_AREAS, STORM_EVENTS, DEFAULT_WEIGHTS, WEIGHT_LABELS, CITY_ZIPS } from "./constants";
 import { parseCSV, normaliseRow } from "./utils/parsers";
 import { scoreProperty, filterByValue } from "./utils/scoring";
 import { fetchHistoricalAlerts, fetchLiveAlerts, fetchHWO, fetchStormHistory as fetchStormHistoryApi } from "./utils/stormApi";
@@ -227,6 +227,25 @@ export default function StormLeads() {
   };
 
   // ── Alert fetching — delegates to stormApi utils ───────────────────────────
+  useEffect(() => {
+    if (alertsDone && areaRanking.length > 0 && !isScouting) {
+      // 1. Auto-select Zips for the map based on hit areas
+      const hitZips = new Set();
+      areaRanking.filter(a => a.pts >= 2).forEach(a => {
+        const zips = CITY_ZIPS[a.name.toUpperCase()] || [];
+        zips.forEach(z => hitZips.add(z));
+      });
+      if (hitZips.size > 0 && selectedZips.length === 0) {
+        setSelectedZips(Array.from(hitZips));
+      }
+
+      // 2. Auto-scout only if we haven't already
+      if (globalLeads.length === 0) {
+        scoutStormPath();
+      }
+    }
+  }, [alertsDone, areaRanking, isScouting, globalLeads.length, selectedZips.length]);
+
   const fetchAlerts = async () => {
     setFetchingAlerts(true);
     setAlerts([]);
@@ -785,6 +804,15 @@ export default function StormLeads() {
                     selectedZips={selectedZips}
                     onZipToggle={onZipToggle}
                     onFetch={pullByZips}
+                    leads={leads.length > 0 ? leads : globalLeads}
+                    stormReports={alerts.map(a => ({
+                      lat: a.geometry?.type === "Point" ? a.geometry.coordinates[1] : null,
+                      lon: a.geometry?.type === "Point" ? a.geometry.coordinates[0] : null,
+                      event: a.properties.event,
+                      desc: a.properties.parameters?.hailSize ? `Hail: ${a.properties.parameters.hailSize}"` : a.properties.event
+                    })).filter(r => r.lat && r.lon)}
+                    areaSeverity={areaSeverity}
+                    stormPolygon={alerts.find(a => a.geometry?.type === "Polygon" || a.geometry?.type === "MultiPolygon")?.geometry}
                   />
                 </Suspense>
               )}

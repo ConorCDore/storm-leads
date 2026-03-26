@@ -71,44 +71,30 @@ export default function Dashboard({
         </div>
       )}
 
-      {/* Active storm areas */}
+      {/* Tactical Target Zones */}
       {alertsDone && areaRanking.length > 0 && (
-        <div className="card">
-          <div className="lbl">
-            {isHistorical ? `Storm Areas — ${stormDate}` : "Active Storm Areas"}
+        <div className="card" style={{borderLeft:"4px solid #ef4444"}}>
+          <div className="lbl" style={{display:"flex", alignItems:"baseline", gap:6}}>
+             🎯 Target Zones 
+             <span style={{fontSize:".6rem", color:"#6b7280", letterSpacing:0, textTransform:"none"}}> (Areas hit by {isHistorical ? "verified reports" : "active alerts"})</span>
           </div>
           <div className="sev-grid">
-            {areaRanking.slice(0, 6).map(a => (
+            {areaRanking.slice(0, 8).map(a => (
               <div key={a.name} className={`sev-row s${a.pts}`}>
                 <span className="sev-name">{a.name}</span>
                 <span className="sev-detail">
                   {a.hail ? `${a.hail}" hail` : ""}
                   {a.wind ? `${a.hail ? " · " : ""}${a.wind} mph` : ""}
                 </span>
-                {stormHistory[a.name] > 0 && (
-                  <span style={{
-                    fontSize:".57rem", color:"#6b7280",
-                    border:"1px solid rgba(255,255,255,.08)", borderRadius:2,
-                    padding:"1px 5px", marginRight:4, whiteSpace:"nowrap"
-                  }}>
-                    {stormHistory[a.name]}×/5yr
-                  </span>
-                )}
                 <span className={`sev-badge s${a.pts}`}>
                   {a.pts === 3 ? "SEVERE" : a.pts === 2 ? "MODERATE" : "MINOR"}
                 </span>
               </div>
             ))}
           </div>
-          {areaRanking.length > 6 && (
-            <div style={{fontSize:".6rem",color:"#374151",marginTop:6,cursor:"pointer"}}
-              onClick={() => setTab("storm")}>
-              +{areaRanking.length - 6} more areas — view in Storm tab
-            </div>
-          )}
-          <button className="btn sm outline" style={{marginTop:10,width:"100%",justifyContent:"center"}}
+          <button className="btn sm full outline" style={{marginTop:10}}
             onClick={() => setTab("storm")}>
-            Pull Properties for These Areas →
+            View Target Zones on Map →
           </button>
         </div>
       )}

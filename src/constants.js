@@ -21,6 +21,25 @@ export const AREA_MAP = [
   { label: "Kildeer", township: null, city: null, lat: 42.1695, lon: -88.0493 },
 ];
 
+export const CITY_ZIPS = {
+  "ARLINGTON HEIGHTS": ["60004", "60005"],
+  "MOUNT PROSPECT": ["60056"],
+  "DES PLAINES": ["60016", "60018"],
+  "PARK RIDGE": ["60068"],
+  "ELK GROVE VILLAGE": ["60007"],
+  "SCHAUMBURG": ["60173", "60193", "60194", "60195"],
+  "NILES": ["60714"],
+  "SKOKIE": ["60076", "60077"],
+  "EVANSTON": ["60201", "60202", "60203"],
+  "WILMETTE": ["60091"],
+  "WINNETKA": ["60093"],
+  "GLENVIEW": ["60025", "60026"],
+  "NORTHBROOK": ["60062"],
+  "HIGHLAND PARK": ["60035"],
+  "DEERFIELD": ["60015"],
+  "LAKE ZURICH": ["60047"]
+};
+
 export const COOK_AREAS = AREA_MAP.filter(a => a.township);
 export const OTHER_AREAS = AREA_MAP.filter(a => !a.township);
 
