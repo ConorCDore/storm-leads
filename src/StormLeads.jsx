@@ -190,6 +190,11 @@ const CSS = `
   /* Lead summary */
   .lead-sum { font-size:.62rem; color:#fb923c; margin-top:4px; font-style:italic; line-height:1.4; opacity:.85; }
 
+  /* HWO Pre-Storm banner */
+  .hwo-banner { background:rgba(251,146,60,.07); border:1px solid rgba(251,146,60,.3); border-radius:4px; padding:12px 14px; margin-top:10px; }
+  .hwo-title { font-family:'Bebas Neue',sans-serif; font-size:.85rem; letter-spacing:.1em; color:#fb923c; margin-bottom:5px; display:flex; align-items:center; gap:6px; }
+  .hwo-text { font-size:.65rem; color:#9ca3af; line-height:1.6; margin-bottom:8px; }
+
   /* Severity heat map */
   .sev-grid { display:grid; gap:4px; margin-top:10px; }
   .sev-row { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:3px; border-left:3px solid; }
@@ -223,6 +228,7 @@ export default function StormLeads() {
   const [copied,         setCopied]         = useState(false);
   const [weights,        setWeights]        = useState({...DEFAULT_WEIGHTS});
   const [showWeights,    setShowWeights]    = useState(false);
+  const [hwo,            setHwo]            = useState(null); // { hailMentioned, severeMentioned, summary }
   const fileRef = useRef();
 
   // Inject CSS once (avoids React diffing ~6KB string every render)
@@ -240,12 +246,40 @@ export default function StormLeads() {
   const area = AREA_MAP.find(a => a.label === selectedArea);
 
   // ── NWS ────────────────────────────────────────────────────────────────────
+  const fetchHWO = async () => {
+    try {
+      const listRes = await fetch("https://api.weather.gov/products/types/HWO/locations/LOT", {
+        headers: { "User-Agent": "(StormLeads, storm-leads-app)" }
+      });
+      const listJson = await listRes.json();
+      const latest = listJson["@graph"]?.[0];
+      if (!latest) return;
+      const prodRes = await fetch(latest["@id"], {
+        headers: { "User-Agent": "(StormLeads, storm-leads-app)" }
+      });
+      const prodJson = await prodRes.json();
+      const text = prodJson.productText || "";
+      const lower = text.toLowerCase();
+      const hailMentioned = lower.includes("hail");
+      const severeMentioned = lower.includes("severe") || lower.includes("damaging wind") || lower.includes("tornado");
+      // Pull 1-2 relevant lines as a summary
+      const lines = text.split("\n").map(l => l.trim()).filter(l =>
+        l.toLowerCase().includes("hail") || l.toLowerCase().includes("severe") || l.toLowerCase().includes("thunderstorm")
+      );
+      const summary = lines.slice(0, 2).join(" ").replace(/\s+/g, " ").trim().slice(0, 220);
+      setHwo({ hailMentioned, severeMentioned, summary });
+    } catch { /* silent — HWO is supplemental */ }
+  };
+
   const fetchAlerts = async () => {
     setFetchingAlerts(true);
     try {
-      const res  = await fetch("https://api.weather.gov/alerts/active?area=IL&status=actual&limit=50", {
-        headers: { "User-Agent": "(StormLeads, storm-leads-app)" }
-      });
+      const [res] = await Promise.all([
+        fetch("https://api.weather.gov/alerts/active?area=IL&status=actual&limit=50", {
+          headers: { "User-Agent": "(StormLeads, storm-leads-app)" }
+        }),
+        fetchHWO(),
+      ]);
       const json = await res.json();
       const names    = AREA_MAP.map(a => a.label.toLowerCase());
       const counties = ["cook","dupage","lake","will"];
@@ -625,6 +659,19 @@ export default function StormLeads() {
                   <div className="empty-ico">🌤</div>
                   No active alerts for your service area.<br/>
                   <span style={{fontSize:".66rem",color:"#374151"}}>Pre-storm scoring still works.</span>
+                </div>
+              )}
+              {alertsDone && hwo?.hailMentioned && (
+                <div className="hwo-banner">
+                  <div className="hwo-title">⚠ Pre-Storm Scout</div>
+                  <div className="hwo-text">
+                    NWS Hazardous Weather Outlook mentions{" "}
+                    <b style={{color:"#fb923c"}}>{hwo.severeMentioned ? "hail and severe weather" : "hail"}</b>
+                    {" "}for the Chicago area.
+                    No active warnings yet — get your leads scored and route planned tonight.
+                    {hwo.summary && <div style={{color:"#6b7280",fontSize:".62rem",marginTop:4}}>{hwo.summary}</div>}
+                  </div>
+                  <button className="btn sm" onClick={()=>setTab("properties")}>Pre-Rank Leads →</button>
                 </div>
               )}
               {alerts.map((a,i)=>(
