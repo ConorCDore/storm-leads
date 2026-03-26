@@ -17,7 +17,7 @@ export async function fetchAddressesByCity(city, limit) {
   const url  =
     `${BASE}/3723-97qp.json` +
     `?$where=${encodeURIComponent(`upper(prop_address_city_name)='${city}' AND year='${year}'`)}` +
-    `&$select=pin,prop_address_full,prop_address_city_name,prop_address_zipcode_1,owner_address_name` +
+    `&$select=pin,prop_address_full,prop_address_city_name,prop_address_zipcode_1,owner_address_name,owner_address_city_name` +
     `&$limit=${limit}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Address API ${res.status}: ${await res.text().catch(() => "")}`);
@@ -31,7 +31,7 @@ export async function fetchAddressesByZip(zips, limit) {
   const url     =
     `${BASE}/3723-97qp.json` +
     `?$where=${encodeURIComponent(`prop_address_zipcode_1 in(${zipList}) AND year='${year}'`)}` +
-    `&$select=pin,prop_address_full,prop_address_city_name,prop_address_zipcode_1,owner_address_name` +
+    `&$select=pin,prop_address_full,prop_address_city_name,prop_address_zipcode_1,owner_address_name,owner_address_city_name` +
     `&$limit=${limit}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Address API ${res.status}`);
@@ -144,59 +144,80 @@ export async function enrichAddresses(addrNorm, onStatus = () => {}) {
 }
 
 // ── Motivation Classifier ─────────────────────────────────────────────────────
+// Priority: INVESTOR → FLIPPER → ABSENTEE → RECENT_BUYER → STANDARD
+// FLIPPER   = bought ≤12 months ago AND lives elsewhere (non-resident recent buyer)
+// ABSENTEE  = mailing city ≠ property city, purchase >12 months ago (or no sale)
+// RECENT_BUYER = bought ≤18 months ago AND lives at the property (mailing = property city)
 export function classifyMotivation(row) {
-  const reasons = [];
-  let tier = "STANDARD";
+  const reasons   = [];
+  let tier  = "STANDARD";
   let label = "";
 
-  const ownerName = row.ownerName || "";
-  const saleDate = row.saleDate || "";
-  const salePrice = parseFloat(row.salePrice) || 0;
-  const value = parseFloat(row.value) || 0;
-  const city = (row.city || "").toUpperCase();
+  const ownerName  = (row.ownerName  || "").trim();
+  const ownerCity  = (row.ownerCity  || "").trim().toUpperCase();
+  const propCity   = (row.city       || "").trim().toUpperCase();
+  const saleDate   = row.saleDate  || "";
+  const salePrice  = parseFloat(row.salePrice) || 0;
 
-  const now = new Date();
-  const saleDateObj = saleDate ? new Date(saleDate) : null;
-  const monthsSinceSale = saleDateObj ? (now - saleDateObj) / (1000 * 60 * 60 * 24 * 30.44) : 999;
+  const now              = new Date();
+  const saleDateObj      = saleDate ? new Date(saleDate) : null;
+  const monthsSinceSale  = saleDateObj
+    ? (now - saleDateObj) / (1000 * 60 * 60 * 24 * 30.44)
+    : 999;
 
-  // 1. INVESTOR
-  const investorKeywords = ["LLC", "CORP", "INC", "TRUST", "HOLDINGS", "REIT", "PROPERTIES", "INVESTMENTS", "REALTY", "PARTNERS", "VENTURES"];
+  // ── 1. INVESTOR — entity name signals (LLC, Corp, etc.) ──────────────────────
+  const investorKeywords = [
+    "LLC","CORP","INC","TRUST","HOLDINGS","REIT","PROPERTIES",
+    "INVESTMENTS","REALTY","PARTNERS","VENTURES","GROUP","CAPITAL",
+    "MANAGEMENT","ASSETS","FUND",
+  ];
   const isInvestor = investorKeywords.some(k => ownerName.toUpperCase().includes(k));
 
-  // 2. FLIPPER — purchased within last 6 months and not already an investor entity.
-  // Price-discount check removed: sale_price is often absent in the dataset, and
-  // in practice any sub-6-month owner needs the roof fixed before they can resell.
-  const isFlipper = monthsSinceSale <= 6;
+  // ── 2. Non-resident flag — mailing city differs from property city ────────────
+  // Falls back to name-word heuristic when mailing city is absent from dataset.
+  let isNonResident = false;
+  if (ownerCity && propCity) {
+    isNonResident = ownerCity !== propCity;
+  } else if (ownerName && propCity) {
+    // Fallback: if none of the property city's words appear in owner name
+    const cityWords = propCity.split(/[\s,]+/).filter(w => w.length > 3);
+    isNonResident = cityWords.length > 0 && !cityWords.some(w => ownerName.toUpperCase().includes(w));
+  }
 
-  // 3. RECENT_BUYER — purchased 6–18 months ago (not a flipper, not an investor)
-  const isRecentBuyer = monthsSinceSale > 6 && monthsSinceSale <= 18;
+  // ── 3. FLIPPER — recent non-resident buyer ────────────────────────────────────
+  // Bought ≤12 months ago AND doesn't live there = flipping or converting to rental.
+  const isFlipper = !isInvestor && monthsSinceSale <= 12 && isNonResident;
 
-  // 4. ABSENTEE
-  // ownerName is present but doesn't match any word in the property's city name, AND saleDate is not recent
-  const cityWords = city.split(/[\s,]+/).filter(w => w.length > 2);
-  const ownerMatchesCity = cityWords.length > 0 && cityWords.some(w => ownerName.toUpperCase().includes(w));
-  const isAbsentee = ownerName && !ownerMatchesCity && monthsSinceSale > 18;
+  // ── 4. ABSENTEE — established non-resident (not a recent purchase) ────────────
+  const isAbsentee = !isInvestor && !isFlipper && isNonResident;
 
+  // ── 5. RECENT_BUYER — owner-occupant who bought recently ─────────────────────
+  const isRecentBuyer = !isInvestor && !isFlipper && !isAbsentee && monthsSinceSale <= 18;
+
+  // ── Assign tier ───────────────────────────────────────────────────────────────
   if (isInvestor) {
-    tier = "INVESTOR";
+    tier  = "INVESTOR";
     label = "Investor / LLC";
     reasons.push(`Owner: ${ownerName}`);
+    if (ownerCity && ownerCity !== propCity) reasons.push(`Mailing: ${ownerCity}`);
   } else if (isFlipper) {
-    tier = "FLIPPER";
+    tier  = "FLIPPER";
     label = "Recent Flip";
     const mo = Math.round(monthsSinceSale);
-    reasons.push(`Purchased ${mo <= 1 ? "within the last month" : `${mo} months ago`} — on a tight resale clock`);
-    if (salePrice > 0) reasons.push(`Sale price: $${salePrice.toLocaleString()}`);
-  } else if (isRecentBuyer) {
-    tier = "RECENT_BUYER";
-    label = "New Owner";
-    const mo = Math.round(monthsSinceSale);
-    reasons.push(`Purchased ${mo} months ago`);
+    reasons.push(`Purchased ${mo <= 1 ? "within the last month" : `${mo} months ago`} · not living at property`);
+    if (ownerCity) reasons.push(`Owner mailing: ${ownerCity}`);
     if (salePrice > 0) reasons.push(`Sale price: $${salePrice.toLocaleString()}`);
   } else if (isAbsentee) {
-    tier = "ABSENTEE";
+    tier  = "ABSENTEE";
     label = "Absentee Owner";
-    reasons.push("Mailing address differs from property city");
+    if (ownerCity) reasons.push(`Owner mailing: ${ownerCity} · property in: ${propCity}`);
+    else           reasons.push("Mailing address differs from property city");
+  } else if (isRecentBuyer) {
+    tier  = "RECENT_BUYER";
+    label = "New Owner";
+    const mo = Math.round(monthsSinceSale);
+    reasons.push(`Purchased ${mo} month${mo !== 1 ? "s" : ""} ago`);
+    if (salePrice > 0) reasons.push(`Sale price: $${salePrice.toLocaleString()}`);
   }
 
   return { tier, label, reasons };
