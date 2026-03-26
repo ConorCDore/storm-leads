@@ -31,6 +31,44 @@ const ROOF_VULN = { "shingle":3, "asphalt":3, "wood":2, "shake":2, "tar":2, "gra
 const DEFAULT_WEIGHTS = { roofAge:3, propertyValue:2, stormSeverity:4, roofMaterial:3, permitAge:2 };
 const WEIGHT_LABELS = { roofAge:"Roof Age", propertyValue:"Property Value", stormSeverity:"Storm Severity", roofMaterial:"Roof Material", permitAge:"Permit History" };
 
+// ── IEM LSR → synthetic NWS alert converter ───────────────────────────────────
+// Converts an IEM Local Storm Report feature into the same shape as an NWS alert
+// so the existing areaSeverity / areaRanking logic works unchanged in historical mode.
+function lsrToAlert(feature) {
+  const p = feature.properties || {};
+  const type = (p.typetext || p.type || "").toUpperCase();
+  const mag  = parseFloat(p.magnitude) || 0;
+  let event, severity;
+  const params = {};
+
+  if (type.includes("TORNADO")) {
+    event = "Tornado"; severity = "Extreme";
+  } else if (type.includes("HAIL")) {
+    event = "Hail";
+    severity = mag >= 2 ? "Severe" : mag >= 1 ? "Moderate" : "Minor";
+    if (mag > 0) params.hailSize = [mag.toFixed(2)];
+  } else if (type.includes("WIND") || type.includes("WND")) {
+    event = "Severe Thunderstorm";
+    severity = mag >= 65 ? "Severe" : mag >= 45 ? "Moderate" : "Minor";
+    if (mag > 0) params.windGust = [String(mag)];
+  } else if (type.includes("TSTM") || type.includes("THUNDER")) {
+    event = "Severe Thunderstorm"; severity = "Moderate";
+  } else {
+    event = p.typetext || "Storm Report"; severity = "Minor";
+  }
+
+  // Match reporter's city to a known service area
+  const city = (p.city || "").toUpperCase();
+  const matched = AREA_MAP.find(a =>
+    (a.city && city.includes(a.city)) ||
+    city.includes(a.label.toUpperCase()) ||
+    a.label.toUpperCase().includes(city)
+  );
+  const areaDesc = matched ? matched.label : (p.city || p.county || "");
+
+  return { properties: { event, severity, areaDesc, parameters: params } };
+}
+
 // ── CSV parser ────────────────────────────────────────────────────────────────
 function parseCSV(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
@@ -108,8 +146,10 @@ const CSS = `
   .btn.outline:hover { background:rgba(251,146,60,.08); }
 
   /* Form controls */
-  select, input[type=number] { background:rgba(255,255,255,.04); border:1px solid rgba(251,146,60,.25); color:#d4cfc8; font-family:'DM Mono',monospace; font-size:.8rem; padding:7px 10px; border-radius:3px; outline:none; }
-  select:focus, input[type=number]:focus { border-color:#fb923c; }
+  select, input[type=number], input[type=date] { background:rgba(255,255,255,.04); border:1px solid rgba(251,146,60,.25); color:#d4cfc8; font-family:'DM Mono',monospace; font-size:.8rem; padding:7px 10px; border-radius:3px; outline:none; }
+  select:focus, input[type=number]:focus, input[type=date]:focus { border-color:#fb923c; }
+  input[type=date] { color-scheme:dark; }
+  input[type=date]::-webkit-calendar-picker-indicator { filter:invert(.4) sepia(1) saturate(3) hue-rotate(10deg); cursor:pointer; }
   .field { display:flex; flex-direction:column; gap:3px; }
   .field-lbl { font-size:.62rem; color:#4b5563; text-transform:uppercase; letter-spacing:.1em; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
@@ -229,6 +269,8 @@ export default function StormLeads() {
   const [weights,        setWeights]        = useState({...DEFAULT_WEIGHTS});
   const [showWeights,    setShowWeights]    = useState(false);
   const [hwo,            setHwo]            = useState(null); // { hailMentioned, severeMentioned, summary }
+  const [stormDate,      setStormDate]      = useState("");   // "" = live; "YYYY-MM-DD" = historical
+  const [isHistorical,   setIsHistorical]   = useState(false);
   const fileRef = useRef();
 
   // Inject CSS once (avoids React diffing ~6KB string every render)
@@ -244,6 +286,28 @@ export default function StormLeads() {
 
   // Derived
   const area = AREA_MAP.find(a => a.label === selectedArea);
+
+  // ── IEM Historical Storm Reports (Local Storm Reports) ───────────────────────
+  // Queries the Iowa Environmental Mesonet archive for NOAA-verified ground reports
+  // (spotter-confirmed hail size, wind gusts, tornadoes) for a given date.
+  const fetchHistoricalAlerts = async (dateStr) => {
+    const d    = new Date(dateStr + "T12:00:00");
+    const next = new Date(d); next.setDate(next.getDate() + 1);
+    const pad  = n => String(n).padStart(2, "0");
+    const url  =
+      `https://mesonet.agron.iastate.edu/geojson/lsr.geojson` +
+      `?syear=${d.getFullYear()}&smonth=${pad(d.getMonth()+1)}&sday=${pad(d.getDate())}` +
+      `&eyear=${next.getFullYear()}&emonth=${pad(next.getMonth()+1)}&eday=${pad(next.getDate())}` +
+      `&wfo=LOT`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`IEM API returned ${res.status}`);
+    const json = await res.json();
+    return (json.features || []).filter(f => {
+      const st = (f.properties?.state  || "").toUpperCase();
+      const co = (f.properties?.county || "").toUpperCase();
+      return st === "IL" && ["COOK","DUPAGE","LAKE","WILL"].some(c => co.includes(c));
+    });
+  };
 
   // ── NWS ────────────────────────────────────────────────────────────────────
   const fetchHWO = async () => {
@@ -273,22 +337,32 @@ export default function StormLeads() {
 
   const fetchAlerts = async () => {
     setFetchingAlerts(true);
+    setAlerts([]);
     try {
-      const [res] = await Promise.all([
-        fetch("https://api.weather.gov/alerts/active?area=IL&status=actual&limit=50", {
-          headers: { "User-Agent": "(StormLeads, storm-leads-app)" }
-        }),
-        fetchHWO(),
-      ]);
-      const json = await res.json();
-      const names    = AREA_MAP.map(a => a.label.toLowerCase());
-      const counties = ["cook","dupage","lake","will"];
-      setAlerts((json.features || []).filter(f => {
-        const ev = (f.properties.event    || "").toLowerCase();
-        const ar = (f.properties.areaDesc || "").toLowerCase();
-        return STORM_EVENTS.some(k => ev.includes(k.toLowerCase())) &&
-          (names.some(n => ar.includes(n)) || counties.some(c => ar.includes(c)));
-      }));
+      if (stormDate) {
+        // ── Historical mode — IEM Local Storm Reports ──────────────────────
+        const features = await fetchHistoricalAlerts(stormDate);
+        setAlerts(features.map(lsrToAlert));
+        setIsHistorical(true);
+      } else {
+        // ── Live mode — NWS Active Alerts ─────────────────────────────────
+        const [res] = await Promise.all([
+          fetch("https://api.weather.gov/alerts/active?area=IL&status=actual&limit=50", {
+            headers: { "User-Agent": "(StormLeads, storm-leads-app)" }
+          }),
+          fetchHWO(),
+        ]);
+        const json = await res.json();
+        const names    = AREA_MAP.map(a => a.label.toLowerCase());
+        const counties = ["cook","dupage","lake","will"];
+        setAlerts((json.features || []).filter(f => {
+          const ev = (f.properties.event    || "").toLowerCase();
+          const ar = (f.properties.areaDesc || "").toLowerCase();
+          return STORM_EVENTS.some(k => ev.includes(k.toLowerCase())) &&
+            (names.some(n => ar.includes(n)) || counties.some(c => ar.includes(c)));
+        }));
+        setIsHistorical(false);
+      }
     } catch { setAlerts([]); }
     setAlertsDone(true);
     setFetchingAlerts(false);
@@ -584,7 +658,8 @@ export default function StormLeads() {
   const exportList = () => {
     const date = new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
     let out = `STORM LEAD LIST — ${selectedArea} — ${date}\n`;
-    if (alerts.length) out += `⚡ ${alerts.length} active NWS alerts\n`;
+    if (isHistorical) out += `📅 Storm date: ${stormDate} — ${alerts.length} NOAA ground reports\n`;
+    else if (alerts.length) out += `⚡ ${alerts.length} active NWS alerts\n`;
     out += "═".repeat(44) + "\n\n";
     ["HIGH","MEDIUM","LOW"].forEach(tier => {
       const list = leads.filter(l => l.tier === tier);
@@ -593,7 +668,7 @@ export default function StormLeads() {
       out += `${ico} ${tier} — ${list.length} leads\n` + "─".repeat(40) + "\n";
       list.forEach((l,i) => { out += `${i+1}. ${l.address}\n   Score: ${l.score}/10 — ${l.reason}\n\n`; });
     });
-    out += `Total: ${leads.length} leads\nSource: Cook County Assessor Open Data + NOAA NWS`;
+    out += `Total: ${leads.length} leads\nSource: Cook County Assessor Open Data + ${isHistorical ? `NOAA/IEM Storm Reports (${stormDate})` : "NOAA NWS"}`;
     // execCommand fallback — works in sandboxed iframes where clipboard API is blocked
     try {
       const el = Object.assign(document.createElement("textarea"), {
@@ -646,22 +721,49 @@ export default function StormLeads() {
           {/* ── STORM TAB ─────────────────────────────────────────────────── */}
           {tab==="storm" && <>
             <div className="card">
-              <div className="lbl">NWS Active Alerts — Illinois</div>
-              <div className="row" style={{marginBottom:12}}>
+              <div className="lbl">{isHistorical ? `Ground Reports — ${stormDate}` : "NWS Active Alerts — Illinois"}</div>
+
+              {/* Date picker row */}
+              <div className="row" style={{marginBottom:8,gap:8,flexWrap:"wrap"}}>
                 <span style={{fontSize:".7rem",color:"#4b5563",flex:1}}>Cook · DuPage · Lake · Will Counties</span>
-                <button className="btn" onClick={fetchAlerts} disabled={fetchingAlerts}>
-                  {fetchingAlerts?<><span className="sp"/>Fetching…</>:"Fetch Alerts"}
+                <input type="date" value={stormDate}
+                  max={new Date().toISOString().slice(0,10)}
+                  title="Leave blank for live alerts, or pick a past date for historical storm reports"
+                  onChange={e=>{setStormDate(e.target.value);setAlerts([]);setAlertsDone(false);setIsHistorical(false);}}
+                  style={{fontSize:".75rem",padding:"5px 8px"}}
+                />
+              </div>
+              <div className="row" style={{marginBottom:12,gap:8}}>
+                {stormDate && (
+                  <button className="btn sm outline" onClick={()=>{setStormDate("");setAlerts([]);setAlertsDone(false);setIsHistorical(false);}}>
+                    ← Live
+                  </button>
+                )}
+                <button className="btn" style={{flex:1,justifyContent:"center"}} onClick={fetchAlerts} disabled={fetchingAlerts}>
+                  {fetchingAlerts ? <><span className="sp"/>Fetching…</> : stormDate ? `Fetch Reports for ${stormDate}` : "Fetch Live Alerts"}
                 </button>
               </div>
-              {!alertsDone && <div style={{fontSize:".68rem",color:"#374151",lineHeight:1.6}}>Pulls live NWS watches and warnings filtered to your 18 service areas. Severity feeds into lead scoring.</div>}
-              {alertsDone && alerts.length===0 && (
-                <div className="empty" style={{padding:"18px 0"}}>
-                  <div className="empty-ico">🌤</div>
-                  No active alerts for your service area.<br/>
-                  <span style={{fontSize:".66rem",color:"#374151"}}>Pre-storm scoring still works.</span>
+
+              {!alertsDone && (
+                <div style={{fontSize:".68rem",color:"#374151",lineHeight:1.6}}>
+                  {stormDate
+                    ? `Historical mode — will pull NOAA-verified ground reports (hail size, wind, tornadoes) for ${stormDate} from the Iowa Environmental Mesonet archive.`
+                    : "Pulls live NWS watches and warnings filtered to your 18 service areas. Severity feeds into lead scoring."}
                 </div>
               )}
-              {alertsDone && hwo?.hailMentioned && (
+
+              {alertsDone && alerts.length===0 && (
+                <div className="empty" style={{padding:"18px 0"}}>
+                  <div className="empty-ico">{isHistorical ? "📅" : "🌤"}</div>
+                  {isHistorical
+                    ? <>No storm reports found for {stormDate}.<br/><span style={{fontSize:".66rem",color:"#374151"}}>Try an adjacent date — overnight events may fall on the next day.</span></>
+                    : <>No active alerts for your service area.<br/><span style={{fontSize:".66rem",color:"#374151"}}>Pre-storm scoring still works.</span></>
+                  }
+                </div>
+              )}
+
+              {/* HWO Pre-Storm banner — live mode only */}
+              {alertsDone && !isHistorical && hwo?.hailMentioned && (
                 <div className="hwo-banner">
                   <div className="hwo-title">⚠ Pre-Storm Scout</div>
                   <div className="hwo-text">
@@ -674,7 +776,21 @@ export default function StormLeads() {
                   <button className="btn sm" onClick={()=>setTab("properties")}>Pre-Rank Leads →</button>
                 </div>
               )}
-              {alerts.map((a,i)=>(
+
+              {/* Historical mode: summary count instead of individual cards */}
+              {isHistorical && alerts.length > 0 && (
+                <div style={{fontSize:".7rem",color:"#10b981",marginBottom:8,padding:"8px 10px",background:"rgba(16,185,129,.06)",border:"1px solid rgba(16,185,129,.15)",borderRadius:3}}>
+                  ✓ {alerts.length} verified storm reports for {stormDate}
+                  {alerts.filter(a=>a.properties.parameters?.hailSize).length > 0 &&
+                    ` · ${alerts.filter(a=>a.properties.parameters?.hailSize).length} hail reports`}
+                  {alerts.filter(a=>a.properties.event==="Tornado").length > 0 &&
+                    ` · ${alerts.filter(a=>a.properties.event==="Tornado").length} tornadoes`}
+                  {" — source: NOAA/IEM spotter network"}
+                </div>
+              )}
+
+              {/* Live mode: individual alert cards */}
+              {!isHistorical && alerts.map((a,i)=>(
                 <div key={i} className={`al ${sevCls(a.properties.severity)}`}>
                   <div className="al-t">
                     <span className="al-dot" style={{background:sevColor(a.properties.severity)}}/>
@@ -740,7 +856,10 @@ export default function StormLeads() {
                 )}
               </div>
             </div>
-            <div className="note"><b>Source:</b> NOAA / National Weather Service — free, real-time, no key required.<br/><b>Upgrade:</b> Swap with Hailstrike or CoreLogic for parcel-level hail data.</div>
+            <div className="note">
+              <b>Live mode:</b> NOAA / National Weather Service — real-time warnings, no key required.<br/>
+              <b>Historical mode:</b> Iowa Environmental Mesonet archive — NOAA-verified spotter reports with exact hail size and wind speed, going back years. Pick any past date.
+            </div>
           </>}
 
           {/* ── PROPERTIES TAB ────────────────────────────────────────────── */}
