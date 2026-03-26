@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.claude/
+
+# OS
+.DS_Store
+
+# Local scratch files
+*.dmg
+*.csv
+/StormLeads.jsx
+/StormLeads (1).jsx
+/StormLeads (2).jsx
