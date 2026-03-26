@@ -163,13 +163,13 @@ export function classifyMotivation(row) {
   const investorKeywords = ["LLC", "CORP", "INC", "TRUST", "HOLDINGS", "REIT", "PROPERTIES", "INVESTMENTS", "REALTY", "PARTNERS", "VENTURES"];
   const isInvestor = investorKeywords.some(k => ownerName.toUpperCase().includes(k));
 
-  // 2. FLIPPER
-  // bought at <80% of estimated market value (AV * 3.3) within last 12 months
-  const estMarketValue = value * 3.3;
-  const isFlipper = monthsSinceSale <= 12 && salePrice > 0 && estMarketValue > 0 && salePrice < (estMarketValue * 0.80);
+  // 2. FLIPPER — purchased within last 6 months and not already an investor entity.
+  // Price-discount check removed: sale_price is often absent in the dataset, and
+  // in practice any sub-6-month owner needs the roof fixed before they can resell.
+  const isFlipper = monthsSinceSale <= 6;
 
-  // 3. RECENT_BUYER
-  const isRecentBuyer = monthsSinceSale <= 18;
+  // 3. RECENT_BUYER — purchased 6–18 months ago (not a flipper, not an investor)
+  const isRecentBuyer = monthsSinceSale > 6 && monthsSinceSale <= 18;
 
   // 4. ABSENTEE
   // ownerName is present but doesn't match any word in the property's city name, AND saleDate is not recent
@@ -184,12 +184,15 @@ export function classifyMotivation(row) {
   } else if (isFlipper) {
     tier = "FLIPPER";
     label = "Recent Flip";
-    reasons.push(`Sold ${Math.round(monthsSinceSale)} months ago · $${salePrice.toLocaleString()}`);
-    reasons.push(`Bought below market (est. ${Math.round((salePrice / estMarketValue) * 100)}% of AV×3.3)`);
+    const mo = Math.round(monthsSinceSale);
+    reasons.push(`Purchased ${mo <= 1 ? "within the last month" : `${mo} months ago`} — on a tight resale clock`);
+    if (salePrice > 0) reasons.push(`Sale price: $${salePrice.toLocaleString()}`);
   } else if (isRecentBuyer) {
     tier = "RECENT_BUYER";
     label = "New Owner";
-    reasons.push(`Sold ${Math.round(monthsSinceSale)} months ago · $${salePrice.toLocaleString()}`);
+    const mo = Math.round(monthsSinceSale);
+    reasons.push(`Purchased ${mo} months ago`);
+    if (salePrice > 0) reasons.push(`Sale price: $${salePrice.toLocaleString()}`);
   } else if (isAbsentee) {
     tier = "ABSENTEE";
     label = "Absentee Owner";
