@@ -408,9 +408,11 @@ export default function StormLeads() {
   }, [areaSeverity]);
 
   // Route-sorted leads — groups by zip then street for efficient canvassing
+  const combinedLeads = useMemo(() => [...leads, ...globalLeads], [leads, globalLeads]);
+
   const displayLeads = useMemo(() => {
-    if (sortMode !== "route") return leads;
-    return [...leads].sort((a, b) => {
+    if (sortMode !== "route") return combinedLeads;
+    return [...combinedLeads].sort((a, b) => {
       const parse = addr => {
         const m = addr.match(/^(\d+)\s+(.+?),\s*.+?,.*?(\d{5})?/i);
         if (!m) return { num: 0, street: addr.toUpperCase(), zip: "" };
@@ -421,7 +423,7 @@ export default function StormLeads() {
       if (pa.street !== pb.street) return pa.street.localeCompare(pb.street);
       return pa.num - pb.num;
     });
-  }, [leads, sortMode]);
+  }, [combinedLeads, sortMode]);
 
   const scoreLeads = (switchTab = true) => {
     if (!rows.length) return;
@@ -1030,7 +1032,7 @@ export default function StormLeads() {
 
           {/* ── LEADS TAB ─────────────────────────────────────────────────── */}
           {tab==="leads" && (
-            !leads.length ? (
+            !combinedLeads.length ? (
               <div className="empty">
                 <div className="empty-ico">📋</div>
                 No leads scored yet.<br/>
@@ -1038,7 +1040,7 @@ export default function StormLeads() {
               </div>
             ) : (
               <LeadsGrid
-                leads={leads}
+                leads={combinedLeads}
                 displayLeads={displayLeads}
                 sortMode={sortMode}
                 setSortMode={setSortMode}
