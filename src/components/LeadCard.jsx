@@ -31,8 +31,10 @@ export default function LeadCard({ lead }) {
               {hasHail && <span className="storm-badge hail">🌨 HAIL</span>}
               {hasWind && <span className="storm-badge wind">💨 HIGH WIND</span>}
               
+              {lead.motivation?.tier === "ELITE_FLIPPER" && <span className="motiv-badge flipper">🔥 ELITE FLIP</span>}
               {lead.motivation?.tier === "INVESTOR" && <span className="motiv-badge investor">🏢 INVESTOR</span>}
               {lead.motivation?.tier === "FLIPPER" && <span className="motiv-badge flipper">🔄 FLIPPER</span>}
+              {lead.motivation?.tier === "DISTRESSED_BUYER" && <span className="motiv-badge distressed">📉 DISTRESSED</span>}
               {lead.motivation?.tier === "RECENT_BUYER" && <span className="motiv-badge recent">🔑 NEW OWNER</span>}
               {lead.motivation?.tier === "ABSENTEE" && <span className="motiv-badge absentee">📬 ABSENTEE</span>}
             </div>

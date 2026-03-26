@@ -39,8 +39,10 @@ export default function LeadsGrid({
   // Motivation pill stats
   const mStats = useMemo(() => {
     const counts = {
+      ELITE_FLIPPER: leads.filter(l => l.motivation?.tier === "ELITE_FLIPPER").length,
       INVESTOR: leads.filter(l => l.motivation?.tier === "INVESTOR").length,
       FLIPPER: leads.filter(l => l.motivation?.tier === "FLIPPER").length,
+      DISTRESSED_BUYER: leads.filter(l => l.motivation?.tier === "DISTRESSED_BUYER").length,
       RECENT_BUYER: leads.filter(l => l.motivation?.tier === "RECENT_BUYER").length,
       ABSENTEE: leads.filter(l => l.motivation?.tier === "ABSENTEE").length,
     };
@@ -144,8 +146,10 @@ export default function LeadsGrid({
           All
         </button>
         {[
+          ["ELITE_FLIPPER", "🔥 Elite Flip"],
           ["INVESTOR", "🏢 Investor"],
           ["FLIPPER", "🔄 Flipper"],
+          ["DISTRESSED_BUYER", "📉 Distressed"],
           ["RECENT_BUYER", "🔑 New Owner"],
           ["ABSENTEE", "📬 Absentee"]
         ].map(([tier, label]) => (

@@ -181,6 +181,8 @@ export default function StormLeads() {
   const [pullError,      setPullError]      = useState("");
   const [weights,        setWeights]        = useState({...DEFAULT_WEIGHTS});
   const [pulledPins,     setPulledPins]     = useState(new Set());
+  const [globalLeads,    setGlobalLeads]    = useState([]); // Cross-area top prospects
+  const [isScouting,     setIsScouting]     = useState(false);
   const [hwo,            setHwo]            = useState(null); // { hailMentioned, severeMentioned, summary }
   const [dateMode,       setDateMode]       = useState("live");  // "live" | "quick" | "range"
   const [quickDays,      setQuickDays]      = useState(1);       // 1 = yesterday, 3, 7
@@ -270,8 +272,9 @@ export default function StormLeads() {
     setRows(filtered);
     const alertInfo = getAlertScore();
     const scored = filtered.map(r => {
-      const scoredRow = scoreProperty(r, alertInfo, weights, maxYear);
-      return { ...scoredRow, motivation: classifyMotivation(r) };
+      const motivation = classifyMotivation(r);
+      const scoredRow = scoreProperty(r, alertInfo, weights, maxYear, motivation);
+      return { ...scoredRow, motivation };
     }).sort((a, b) => b.score - a.score);
     setLeads(scored);
     setPulledPins(prev => new Set([...prev, ...newMerged.map(r => r.pin).filter(Boolean)]));
@@ -316,6 +319,39 @@ export default function StormLeads() {
       setPullError(e.message || "Failed to fetch data from Cook County API.");
     }
     setPulling(false);
+  };
+
+  // ── Global Storm Scout ────────────────────────────────────────────────────────
+  const scoutStormPath = async () => {
+    const hitAreas = areaRanking.filter(a => a.pts >= 2).map(a => a.name);
+    if (!hitAreas.length) {
+      setPullError("No 'Moderate' or 'Severe' storm areas detected in current alerts.");
+      return;
+    }
+
+    setIsScouting(true); setPullError(""); setPullStatus(`Scouting storm path across ${hitAreas.length} areas…`);
+    try {
+      const raw = await fetchGlobalMotivatedLeads(hitAreas, 300);
+      if (!raw.length) throw new Error("No highly motivated leads found in the storm path.");
+      
+      const addrNorm = raw.map(normaliseRow).filter(r => r.address || r.pin);
+      const { merged } = await enrichAddresses(addrNorm, setPullStatus);
+      
+      const scored = merged.map(r => {
+        const areaName = AREA_MAP.find(a => a.city === r.city)?.label || selectedArea;
+        const alertInfo = areaSeverity[areaName] || { pts: 0, label: "No alerts" };
+        const motivation = classifyMotivation(r);
+        return scoreProperty(r, alertInfo, weights, maxYear, motivation);
+      }).sort((a, b) => b.score - a.score);
+
+      setGlobalLeads(scored);
+      setTab("dashboard"); 
+      setPullStatus(`Scout complete: Found ${scored.length} motivated prospects in the storm path.`);
+    } catch (e) {
+      console.error("Scout error:", e);
+      setPullError(e.message);
+    }
+    setIsScouting(false);
   };
 
   // ── Map zip toggle ────────────────────────────────────────────────────────────
@@ -420,8 +456,9 @@ export default function StormLeads() {
     const filtered = filterByValue(rows, minValue, maxValue);
     const alertInfo = getAlertScore();
     const scored = filtered.map(r => {
-      const scoredRow = scoreProperty(r, alertInfo, weights, maxYear);
-      return { ...scoredRow, motivation: classifyMotivation(r) };
+      const motivation = classifyMotivation(r);
+      const scoredRow = scoreProperty(r, alertInfo, weights, maxYear, motivation);
+      return { ...scoredRow, motivation };
     }).sort((a, b) => b.score - a.score);
     setLeads(scored);
     if (switchTab) setTab("leads");
@@ -474,6 +511,10 @@ export default function StormLeads() {
               hwo={hwo}
               areaRanking={areaRanking}
               leads={leads}
+              globalLeads={globalLeads}
+              isScouting={isScouting}
+              scoutStormPath={scoutStormPath}
+              pullStatus={pullStatus}
               stormHistory={stormHistory}
               isHistorical={isHistorical}
               stormDate={stormDateLabel}
