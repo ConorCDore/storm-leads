@@ -282,6 +282,10 @@ export default function StormLeads() {
   const [hwo,            setHwo]            = useState(null); // { hailMentioned, severeMentioned, summary }
   const [stormDate,      setStormDate]      = useState("");   // "" = live; "YYYY-MM-DD" = historical
   const [isHistorical,   setIsHistorical]   = useState(false);
+  const [stormHistory,   setStormHistory]   = useState({});  // area label → storm day count (5yr)
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [minHailSize,    setMinHailSize]    = useState(0);   // 0 = no filter
+  const [sortMode,       setSortMode]       = useState("score"); // "score" | "route"
   const fileRef = useRef();
 
   // Inject CSS once (avoids React diffing ~6KB string every render)
@@ -318,6 +322,59 @@ export default function StormLeads() {
       const co = (f.properties?.county || "").toUpperCase();
       return st === "IL" && ["COOK","DUPAGE","LAKE","WILL"].some(c => co.includes(c));
     });
+  };
+
+  // ── IEM 5-Year Storm History ─────────────────────────────────────────────────
+  // Counts unique storm days per service area over the past 5 years using IEM LSR archive.
+  // Groups by calendar date to avoid inflating counts from multiple reports on the same storm.
+  const fetchStormHistory = async () => {
+    setLoadingHistory(true);
+    try {
+      const now  = new Date();
+      const then = new Date(now); then.setFullYear(now.getFullYear() - 5);
+      const pad  = n => String(n).padStart(2, "0");
+      const url  =
+        `https://mesonet.agron.iastate.edu/geojson/lsr.geojson` +
+        `?syear=${then.getFullYear()}&smonth=${pad(then.getMonth()+1)}&sday=${pad(then.getDate())}` +
+        `&eyear=${now.getFullYear()}&emonth=${pad(now.getMonth()+1)}&eday=${pad(now.getDate())}` +
+        `&wfo=LOT`;
+      const res  = await fetch(url);
+      if (!res.ok) throw new Error();
+      const json = await res.json();
+
+      // Sets of unique storm days per area to avoid over-counting
+      const hitDays = {};
+      AREA_MAP.forEach(a => { hitDays[a.label] = new Set(); });
+
+      for (const f of (json.features || [])) {
+        const p  = f.properties || {};
+        if ((p.state || "").toUpperCase() !== "IL") continue;
+        const co = (p.county || "").toUpperCase();
+        if (!["COOK","DUPAGE","LAKE","WILL"].some(c => co.includes(c))) continue;
+
+        // Only count significant events
+        const type = (p.typetext || "").toUpperCase();
+        const mag  = parseFloat(p.magnitude) || 0;
+        if (type.includes("HAIL") && mag < 0.75) continue;
+        if (type.includes("WIND") && !type.includes("TORNADO") && mag < 45) continue;
+        if (!type.includes("HAIL") && !type.includes("WIND") && !type.includes("TORNADO")) continue;
+
+        const city    = (p.city || "").toUpperCase();
+        const dateKey = (p.valid || "").slice(0, 10);
+
+        for (const a of AREA_MAP) {
+          if ((a.city && city.includes(a.city)) || city.includes(a.label.toUpperCase()) ||
+              a.label.toUpperCase().split(" ").some(w => w.length > 3 && city.includes(w))) {
+            hitDays[a.label].add(dateKey);
+          }
+        }
+      }
+
+      const result = {};
+      AREA_MAP.forEach(a => { result[a.label] = hitDays[a.label].size; });
+      setStormHistory(result);
+    } catch { /* silent — history is supplemental */ }
+    setLoadingHistory(false);
   };
 
   // ── NWS ────────────────────────────────────────────────────────────────────
@@ -612,6 +669,22 @@ export default function StormLeads() {
       .sort((a, b) => b.pts - a.pts || b.events.length - a.events.length);
   }, [areaSeverity]);
 
+  // Route-sorted leads — groups by zip then street for efficient canvassing
+  const displayLeads = useMemo(() => {
+    if (sortMode !== "route") return leads;
+    return [...leads].sort((a, b) => {
+      const parse = addr => {
+        const m = addr.match(/^(\d+)\s+(.+?),\s*.+?,.*?(\d{5})?/i);
+        if (!m) return { num: 0, street: addr.toUpperCase(), zip: "" };
+        return { num: parseInt(m[1]) || 0, street: m[2].trim().toUpperCase(), zip: m[3] || "" };
+      };
+      const pa = parse(a.address), pb = parse(b.address);
+      if (pa.zip !== pb.zip) return pa.zip.localeCompare(pb.zip);
+      if (pa.street !== pb.street) return pa.street.localeCompare(pb.street);
+      return pa.num - pb.num;
+    });
+  }, [leads, sortMode]);
+
   const scoreProperty = (r, alertInfo) => {
     const reasons = [];
     const factors = {};
@@ -840,25 +913,60 @@ export default function StormLeads() {
               ))}
               {alertsDone && areaRanking.length > 0 && (
                 <div style={{marginTop:12}}>
-                  <div className="lbl" style={{marginBottom:6}}>Area Severity Ranking</div>
-                  <div className="sev-grid">
-                    {areaRanking.map(a => (
-                      <div key={a.name} className={`sev-row s${a.pts}`}>
-                        <span className="sev-name">{a.name}</span>
-                        <span className="sev-detail">
-                          {a.events.join(", ")}
-                          {a.hail ? ` · ${a.hail}" hail` : ""}
-                          {a.wind ? ` · ${a.wind} mph` : ""}
-                        </span>
-                        <span className={`sev-badge s${a.pts}`}>
-                          {a.pts === 3 ? "SEVERE" : a.pts === 2 ? "MODERATE" : "MINOR"}
-                        </span>
-                      </div>
-                    ))}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+                    <div className="lbl" style={{marginBottom:0}}>Area Severity Ranking</div>
+                    <button className="btn sm outline" onClick={fetchStormHistory} disabled={loadingHistory}
+                      title="Load 5-year storm hit counts for all service areas from NOAA/IEM archive">
+                      {loadingHistory ? <><span className="sp sp-or"/>Loading…</> : Object.keys(stormHistory).length ? "↻ Refresh History" : "Load 5yr History"}
+                    </button>
                   </div>
+                  <div className="sev-grid">
+                    {areaRanking.map(a => {
+                      const hits = stormHistory[a.name];
+                      return (
+                        <div key={a.name} className={`sev-row s${a.pts}`}>
+                          <span className="sev-name">{a.name}</span>
+                          <span className="sev-detail">
+                            {a.events.join(", ")}
+                            {a.hail ? ` · ${a.hail}" hail` : ""}
+                            {a.wind ? ` · ${a.wind} mph` : ""}
+                          </span>
+                          {hits > 0 && (
+                            <span style={{fontSize:".58rem",color: hits >= 4 ? "#ef4444" : hits >= 2 ? "#fb923c" : "#6b7280",
+                              background: hits >= 4 ? "rgba(239,68,68,.1)" : hits >= 2 ? "rgba(251,146,60,.1)" : "rgba(255,255,255,.04)",
+                              border:"1px solid currentColor",borderRadius:2,padding:"1px 5px",marginRight:4,whiteSpace:"nowrap"}}>
+                              {hits}× / 5yr
+                            </span>
+                          )}
+                          <span className={`sev-badge s${a.pts}`}>
+                            {a.pts === 3 ? "SEVERE" : a.pts === 2 ? "MODERATE" : "MINOR"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {/* Not-impacted areas — show history counts if loaded */}
                   {AREA_MAP.filter(a => a.township && areaSeverity[a.label]?.pts === 0).length > 0 && (
-                    <div style={{fontSize:".58rem",color:"#374151",marginTop:6}}>
-                      Not impacted: {AREA_MAP.filter(a => a.township && areaSeverity[a.label]?.pts === 0).map(a => a.label).join(", ")}
+                    <div style={{marginTop:8}}>
+                      {Object.keys(stormHistory).length > 0 ? (
+                        <div className="sev-grid">
+                          {AREA_MAP.filter(a => a.township && areaSeverity[a.label]?.pts === 0 && stormHistory[a.label] > 0)
+                            .sort((a,b) => (stormHistory[b.label]||0) - (stormHistory[a.label]||0))
+                            .map(a => (
+                              <div key={a.label} className="sev-row s1" style={{opacity:.7}}>
+                                <span className="sev-name">{a.label}</span>
+                                <span className="sev-detail">No current alert</span>
+                                <span style={{fontSize:".58rem",color:"#6b7280",border:"1px solid rgba(255,255,255,.1)",borderRadius:2,padding:"1px 5px"}}>
+                                  {stormHistory[a.label]}× / 5yr
+                                </span>
+                              </div>
+                            ))}
+                        </div>
+                      ) : (
+                        <div style={{fontSize:".58rem",color:"#374151",marginTop:4}}>
+                          Not impacted: {AREA_MAP.filter(a => a.township && areaSeverity[a.label]?.pts === 0).map(a => a.label).join(", ")}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -957,9 +1065,38 @@ export default function StormLeads() {
                   </select>
                 </div>
               </div>
+              <div className="grid2" style={{marginBottom:12}}>
+                <div className="field">
+                  <span className="field-lbl">Min Hail Size</span>
+                  <select value={minHailSize} onChange={e=>setMinHailSize(+e.target.value)}>
+                    {[[0,"No minimum"],[0.75,'≥ 0.75"'],[1.0,'≥ 1.0"'],[1.25,'≥ 1.25"'],[1.5,'≥ 1.5"'],[1.75,'≥ 1.75"'],[2.0,'≥ 2.0" (baseball)']].map(([v,l])=><option key={v} value={v}>{l}</option>)}
+                  </select>
+                </div>
+              </div>
 
             {area?.township ? (
                 <>
+                  {/* Hail threshold warning */}
+                  {minHailSize > 0 && (() => {
+                    const areaHail = parseFloat(areaSeverity[selectedArea]?.hail || 0);
+                    const hasData  = areaSeverity[selectedArea]?.hail;
+                    if (!alertsDone) return null;
+                    if (hasData && areaHail < minHailSize) return (
+                      <div style={{fontSize:".67rem",color:"#f97316",background:"rgba(249,115,22,.08)",border:"1px solid rgba(249,115,22,.25)",borderRadius:3,padding:"8px 10px",marginBottom:8}}>
+                        ⚠ {selectedArea} reported {areaHail}" hail — below your {minHailSize}" threshold. Pull anyway or choose a harder-hit area.
+                      </div>
+                    );
+                    if (!hasData) return (
+                      <div style={{fontSize:".67rem",color:"#6b7280",background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.07)",borderRadius:3,padding:"8px 10px",marginBottom:8}}>
+                        No hail size data for {selectedArea}. Fetch alerts first to validate against your {minHailSize}" threshold.
+                      </div>
+                    );
+                    return (
+                      <div style={{fontSize:".67rem",color:"#10b981",background:"rgba(16,185,129,.06)",border:"1px solid rgba(16,185,129,.15)",borderRadius:3,padding:"8px 10px",marginBottom:8}}>
+                        ✓ {selectedArea} reported {areaHail}" hail — meets {minHailSize}" threshold.
+                      </div>
+                    );
+                  })()}
                   <div className="filter-pill" style={{marginBottom:10}}>
                     <span className="pill">{selectedArea}</span>
                     <span className="pill">Township: {area.township}</span>
@@ -967,6 +1104,7 @@ export default function StormLeads() {
                     <span className="pill">{limit} max</span>
                     {minValue > 0 && <span className="pill">${(minValue/1000)}k+</span>}
                     {maxValue > 0 && <span className="pill">≤ ${maxValue >= 1000000 ? (maxValue/1000000)+"M" : (maxValue/1000)+"k"}</span>}
+                    {minHailSize > 0 && <span className="pill">Hail ≥ {minHailSize}"</span>}
                   </div>
                   <button className="btn full" onClick={pullAndScore} disabled={pulling}>
                     {pulling ? <><span className="sp sp-or"/> Pulling…</> : `Pull & Score ${selectedArea} →`}
@@ -1052,6 +1190,18 @@ export default function StormLeads() {
                 <div className="res-hd">
                   <div className="res-stat">{selectedArea} · {leads.length} leads</div>
                   <div className="row" style={{gap:6}}>
+                    {/* Sort toggle */}
+                    <div style={{display:"flex",border:"1px solid rgba(251,146,60,.25)",borderRadius:3,overflow:"hidden"}}>
+                      {[["score","Score"],["route","Route"]].map(([m,l])=>(
+                        <button key={m} onClick={()=>setSortMode(m)}
+                          style={{padding:"5px 10px",fontSize:".7rem",fontFamily:"'Bebas Neue',sans-serif",letterSpacing:".06em",
+                            border:"none",cursor:"pointer",
+                            background: sortMode===m ? "#fb923c" : "transparent",
+                            color: sortMode===m ? "#080c10" : "#fb923c"}}>
+                          {l}
+                        </button>
+                      ))}
+                    </div>
                     {pulledPins.size > 0 && (
                       <button className="btn sm outline" title="Reset duplicate suppression — next pull will re-fetch all properties"
                         onClick={()=>setPulledPins(new Set())}>
@@ -1063,6 +1213,11 @@ export default function StormLeads() {
                     </button>
                   </div>
                 </div>
+                {sortMode==="route" && (
+                  <div style={{fontSize:".62rem",color:"#6b7280",marginBottom:8,padding:"6px 10px",background:"rgba(255,255,255,.02)",border:"1px solid rgba(255,255,255,.05)",borderRadius:3}}>
+                    Route order: sorted by zip → street → house number for efficient canvassing. Tier badges preserved.
+                  </div>
+                )}
                 {/* Scoring Weights — on Results tab where operator can tune & re-score */}
                 <div className="card" style={{padding:"12px 14px",marginBottom:12}}>
                   <div className="row" style={{cursor:"pointer",marginBottom:showWeights?8:0}} onClick={()=>setShowWeights(!showWeights)}>
@@ -1085,24 +1240,42 @@ export default function StormLeads() {
                     </>
                   )}
                 </div>
-                {[["HIGH",hi,"hi","🔴"],["MEDIUM",md,"md","🟡"],["LOW",lo,"lo","🟢"]].map(([tier,list,cls,ico])=>
-                  list.length>0 && (
-                    <div key={tier}>
-                      <div className={`tier-h ${cls}`}>{ico} {tier} — {list.length}</div>
-                      {list.map((l,i)=>(
-                        <div key={i} className={`lead ${cls}`}>
-                          <div className="lead-body">
-                            <div className="lead-addr" title={l.address}>{l.address}</div>
-                            {l.summary && <div className="lead-sum">{l.summary}</div>}
-                            <div className="lead-why">{l.reason}</div>
-                          </div>
-                          <div className="score-box">
-                            <div className="score-n">{l.score}</div>
-                            <div className="score-s">/10</div>
-                          </div>
-                        </div>
-                      ))}
+                {sortMode === "route" ? (
+                  // Route mode — flat list sorted geographically, tier shown as left-border color
+                  displayLeads.map((l,i) => (
+                    <div key={i} className={`lead ${l.tier==="HIGH"?"hi":l.tier==="MEDIUM"?"md":"lo"}`}>
+                      <div className="lead-body">
+                        <div className="lead-addr" title={l.address}>{l.address}</div>
+                        {l.summary && <div className="lead-sum">{l.summary}</div>}
+                        <div className="lead-why">{l.reason}</div>
+                      </div>
+                      <div className="score-box">
+                        <div className="score-n">{l.score}</div>
+                        <div className="score-s">/10</div>
+                      </div>
                     </div>
+                  ))
+                ) : (
+                  // Score mode — grouped by tier
+                  [["HIGH",hi,"hi","🔴"],["MEDIUM",md,"md","🟡"],["LOW",lo,"lo","🟢"]].map(([tier,list,cls,ico])=>
+                    list.length>0 && (
+                      <div key={tier}>
+                        <div className={`tier-h ${cls}`}>{ico} {tier} — {list.length}</div>
+                        {list.map((l,i)=>(
+                          <div key={i} className={`lead ${cls}`}>
+                            <div className="lead-body">
+                              <div className="lead-addr" title={l.address}>{l.address}</div>
+                              {l.summary && <div className="lead-sum">{l.summary}</div>}
+                              <div className="lead-why">{l.reason}</div>
+                            </div>
+                            <div className="score-box">
+                              <div className="score-n">{l.score}</div>
+                              <div className="score-s">/10</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
                   )
                 )}
               </>
