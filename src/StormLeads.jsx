@@ -743,7 +743,18 @@ export default function StormLeads() {
                   )}
                 </div>
               )}
-              {alertsDone && <button className="btn full" style={{marginTop:10}} onClick={()=>document.getElementById("pull-card")?.scrollIntoView({behavior:"smooth"})}>↓ Pull Properties Below</button>}
+              {alertsDone && (
+                <div className="row" style={{marginTop:10, gap:8}}>
+                  <button className="btn outline" style={{flex:1, justifyContent: "center"}} 
+                    onClick={() => document.getElementById("pull-card")?.scrollIntoView({behavior:"smooth"})}>
+                    ↓ Pull Individual Area
+                  </button>
+                  <button className="btn" style={{flex:1, justifyContent: "center"}} 
+                    onClick={scoutStormPath} disabled={isScouting || !areaRanking.some(a => a.pts >= 2)}>
+                    {isScouting ? <><span className="sp"/>Scouting…</> : "🚀 Scout All Hit Areas"}
+                  </button>
+                </div>
+              )}
             </div>
             {/* Simulate storm for testing */}
             <div className="card" style={{borderColor:"rgba(239,68,68,.2)"}}>
@@ -828,20 +839,28 @@ export default function StormLeads() {
             <div className="card" id="pull-card">
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
                 <div className="lbl" style={{marginBottom:0}}>Pull Properties</div>
-                {areaRanking.length > 0 && (
-                  <button
-                    onClick={()=>setHardHitOnly(h=>!h)}
-                    title="Show only areas with MODERATE or SEVERE current alerts"
-                    style={{
-                      padding:"4px 10px", fontSize:".65rem", borderRadius:3, cursor:"pointer",
-                      fontFamily:"'Bebas Neue',sans-serif", letterSpacing:".06em",
-                      border:"1px solid rgba(239,68,68,.35)",
-                      background: hardHitOnly ? "rgba(239,68,68,.15)" : "transparent",
-                      color: hardHitOnly ? "#ef4444" : "#6b7280",
-                    }}>
-                    🔥 {hardHitOnly ? "Hard Hit Only ✓" : "Hard Hit Only"}
-                  </button>
-                )}
+                <div className="row" style={{gap:6}}>
+                  {areaRanking.some(a => a.pts >= 2) && (
+                    <button className="btn sm" onClick={scoutStormPath} disabled={isScouting}
+                      style={{background: "#10b981", color: "#fff"}}>
+                      {isScouting ? "Scouting…" : "🚀 Scout All Hit Areas"}
+                    </button>
+                  )}
+                  {areaRanking.length > 0 && (
+                    <button
+                      onClick={()=>setHardHitOnly(h=>!h)}
+                      title="Show only areas with MODERATE or SEVERE current alerts"
+                      style={{
+                        padding:"4px 10px", fontSize:".65rem", borderRadius:3, cursor:"pointer",
+                        fontFamily:"'Bebas Neue',sans-serif", letterSpacing:".06em",
+                        border:"1px solid rgba(239,68,68,.35)",
+                        background: hardHitOnly ? "rgba(239,68,68,.15)" : "transparent",
+                        color: hardHitOnly ? "#ef4444" : "#6b7280",
+                      }}>
+                      🔥 {hardHitOnly ? "Hard Hit Only ✓" : "Hard Hit Only"}
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="grid2" style={{marginBottom:8}}>
                 <div className="field">
