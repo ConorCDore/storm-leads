@@ -227,24 +227,7 @@ export default function StormLeads() {
   };
 
   // ── Alert fetching — delegates to stormApi utils ───────────────────────────
-  useEffect(() => {
-    if (alertsDone && areaRanking.length > 0 && !isScouting) {
-      // 1. Auto-select Zips for the map based on hit areas
-      const hitZips = new Set();
-      areaRanking.filter(a => a.pts >= 2).forEach(a => {
-        const zips = CITY_ZIPS[a.name.toUpperCase()] || [];
-        zips.forEach(z => hitZips.add(z));
-      });
-      if (hitZips.size > 0 && selectedZips.length === 0) {
-        setSelectedZips(Array.from(hitZips));
-      }
 
-      // 2. Auto-scout only if we haven't already
-      if (globalLeads.length === 0) {
-        scoutStormPath();
-      }
-    }
-  }, [alertsDone, areaRanking, isScouting, globalLeads.length, selectedZips.length]);
 
   const fetchAlerts = async () => {
     setFetchingAlerts(true);
@@ -340,38 +323,7 @@ export default function StormLeads() {
     setPulling(false);
   };
 
-  // ── Global Storm Scout ────────────────────────────────────────────────────────
-  const scoutStormPath = async () => {
-    const hitAreas = areaRanking.filter(a => a.pts >= 2).map(a => a.name);
-    if (!hitAreas.length) {
-      setPullError("No 'Moderate' or 'Severe' storm areas detected in current alerts.");
-      return;
-    }
 
-    setIsScouting(true); setPullError(""); setPullStatus(`Scouting storm path across ${hitAreas.length} areas…`);
-    try {
-      const raw = await fetchGlobalMotivatedLeads(hitAreas, 300);
-      if (!raw.length) throw new Error("No highly motivated leads found in the storm path.");
-      
-      const addrNorm = raw.map(normaliseRow).filter(r => r.address || r.pin);
-      const { merged } = await enrichAddresses(addrNorm, setPullStatus);
-      
-      const scored = merged.map(r => {
-        const areaName = AREA_MAP.find(a => a.city === r.city)?.label || selectedArea;
-        const alertInfo = areaSeverity[areaName] || { pts: 0, label: "No alerts" };
-        const motivation = classifyMotivation(r);
-        return scoreProperty(r, alertInfo, weights, maxYear, motivation);
-      }).sort((a, b) => b.score - a.score);
-
-      setGlobalLeads(scored);
-      setTab("dashboard"); 
-      setPullStatus(`Scout complete: Found ${scored.length} motivated prospects in the storm path.`);
-    } catch (e) {
-      console.error("Scout error:", e);
-      setPullError(e.message);
-    }
-    setIsScouting(false);
-  };
 
   // ── Map zip toggle ────────────────────────────────────────────────────────────
   const onZipToggle = zip =>
@@ -495,6 +447,58 @@ export default function StormLeads() {
     if (pts >= 2 && hist >= 2) return { label: "⚡ Repeat Target", color: "#fb923c", bg: "rgba(251,146,60,.12)" };
     return null;
   };
+
+  // ── Global Storm Scout ────────────────────────────────────────────────────────
+  const scoutStormPath = async () => {
+    const hitAreas = areaRanking.filter(a => a.pts >= 2).map(a => a.name);
+    if (!hitAreas.length) {
+      setPullError("No 'Moderate' or 'Severe' storm areas detected in current alerts.");
+      return;
+    }
+
+    setIsScouting(true); setPullError(""); setPullStatus(`Scouting storm path across ${hitAreas.length} areas…`);
+    try {
+      const raw = await fetchGlobalMotivatedLeads(hitAreas, 300);
+      if (!raw.length) throw new Error("No highly motivated leads found in the storm path.");
+      
+      const addrNorm = raw.map(normaliseRow).filter(r => r.address || r.pin);
+      const { merged } = await enrichAddresses(addrNorm, setPullStatus);
+      
+      const scored = merged.map(r => {
+        const areaName = AREA_MAP.find(a => a.city === r.city)?.label || selectedArea;
+        const alertInfo = areaSeverity[areaName] || { pts: 0, label: "No alerts" };
+        const motivation = classifyMotivation(r);
+        return scoreProperty(r, alertInfo, weights, maxYear, motivation);
+      }).sort((a, b) => b.score - a.score);
+
+      setGlobalLeads(scored);
+      setTab("dashboard"); 
+      setPullStatus(`Scout complete: Found ${scored.length} motivated prospects in the storm path.`);
+    } catch (e) {
+      console.error("Scout error:", e);
+      setPullError(e.message);
+    }
+    setIsScouting(false);
+  };
+
+  useEffect(() => {
+    if (alertsDone && areaRanking.length > 0 && !isScouting) {
+      // 1. Auto-select Zips for the map based on hit areas
+      const hitZips = new Set();
+      areaRanking.filter(a => a.pts >= 2).forEach(a => {
+        const zips = CITY_ZIPS[a.name.toUpperCase()] || [];
+        zips.forEach(z => hitZips.add(z));
+      });
+      if (hitZips.size > 0 && selectedZips.length === 0) {
+        setSelectedZips(Array.from(hitZips));
+      }
+
+      // 2. Auto-scout only if we haven't already
+      if (globalLeads.length === 0) {
+        scoutStormPath();
+      }
+    }
+  }, [alertsDone, areaRanking, isScouting, globalLeads.length, selectedZips.length]);
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
