@@ -1,120 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-
-// ── Data ─────────────────────────────────────────────────────────────────────
-const AREA_MAP = [
-  { label: "Arlington Heights",  township: "Wheeling",       city: "ARLINGTON HEIGHTS"  },
-  { label: "Mount Prospect",     township: "Wheeling",       city: "MOUNT PROSPECT"     },
-  { label: "Des Plaines",        township: "Maine",          city: "DES PLAINES"        },
-  { label: "Park Ridge",         township: "Maine",          city: "PARK RIDGE"         },
-  { label: "Elk Grove Village",  township: "Elk Grove",      city: "ELK GROVE VILLAGE"  },
-  { label: "Schaumburg",         township: "Schaumburg",     city: "SCHAUMBURG"         },
-  { label: "Niles",              township: "Niles",          city: "NILES"              },
-  { label: "Skokie",             township: "Niles",          city: "SKOKIE"             },
-  { label: "Evanston",           township: "Evanston",       city: "EVANSTON"           },
-  { label: "Wilmette",           township: "New Trier",      city: "WILMETTE"           },
-  { label: "Winnetka",           township: "New Trier",      city: "WINNETKA"           },
-  { label: "Glenview",           township: "Northfield",     city: "GLENVIEW"           },
-  { label: "Northbrook",         township: "Northfield",     city: "NORTHBROOK"         },
-  { label: "Highland Park",      township: "Ela",            city: "HIGHLAND PARK"      },
-  { label: "Deerfield",          township: "West Deerfield", city: "DEERFIELD"          },
-  { label: "Lake Zurich",        township: "Ela",            city: "LAKE ZURICH"        },
-  { label: "Libertyville",       township: null,             city: null                 },
-  { label: "Kildeer",            township: null,             city: null                 },
-];
-const COOK_AREAS  = AREA_MAP.filter(a =>  a.township);
-const OTHER_AREAS = AREA_MAP.filter(a => !a.township);
-const STORM_EVENTS = [
-  "Severe Thunderstorm","Tornado","Hail",
-  "Flash Flood","Special Weather Statement","Winter Storm"
-];
-const ROOF_VULN = { "shingle":3, "asphalt":3, "wood":2, "shake":2, "tar":2, "gravel":2, "slate":0, "tile":0, "metal":0, "copper":0 };
-const DEFAULT_WEIGHTS = { roofAge:3, propertyValue:2, stormSeverity:4, roofMaterial:3, permitAge:2 };
-const WEIGHT_LABELS = { roofAge:"Roof Age", propertyValue:"Property Value", stormSeverity:"Storm Severity", roofMaterial:"Roof Material", permitAge:"Permit History" };
-
-// ── IEM LSR → synthetic NWS alert converter ───────────────────────────────────
-// Converts an IEM Local Storm Report feature into the same shape as an NWS alert
-// so the existing areaSeverity / areaRanking logic works unchanged in historical mode.
-function lsrToAlert(feature) {
-  const p = feature.properties || {};
-  const type = (p.typetext || p.type || "").toUpperCase();
-  const mag  = parseFloat(p.magnitude) || 0;
-  let event, severity;
-  const params = {};
-
-  if (type.includes("TORNADO")) {
-    event = "Tornado"; severity = "Extreme";
-  } else if (type.includes("HAIL")) {
-    event = "Hail";
-    severity = mag >= 2 ? "Severe" : mag >= 1 ? "Moderate" : "Minor";
-    if (mag > 0) params.hailSize = [mag.toFixed(2)];
-  } else if (type.includes("WIND") || type.includes("WND")) {
-    event = "Severe Thunderstorm";
-    severity = mag >= 65 ? "Severe" : mag >= 45 ? "Moderate" : "Minor";
-    if (mag > 0) params.windGust = [String(mag)];
-  } else if (type.includes("TSTM") || type.includes("THUNDER")) {
-    event = "Severe Thunderstorm"; severity = "Moderate";
-  } else {
-    event = p.typetext || "Storm Report"; severity = "Minor";
-  }
-
-  // Match reporter's city to a known service area
-  const city = (p.city || "").toUpperCase();
-  const matched = AREA_MAP.find(a =>
-    (a.city && city.includes(a.city)) ||
-    city.includes(a.label.toUpperCase()) ||
-    a.label.toUpperCase().includes(city)
-  );
-  const areaDesc = matched ? matched.label : (p.city || p.county || "");
-
-  return { properties: { event, severity, areaDesc, parameters: params } };
-}
-
-// ── Roof material inference — fallback when Cook County has no data ────────────
-// Coverage is ~11% due to inspection cycle gaps; inference fills the rest.
-// Labels include "(est.)" so operator knows what's verified vs inferred.
-function inferRoofMaterial(yr) {
-  if (!yr || yr <= 0) return { score: 1, label: "Roof type unknown" };
-  if (yr < 1960)  return { score: 2, label: "Est. built-up/flat roof" };
-  if (yr < 2005)  return { score: 3, label: "Est. asphalt shingle" };
-  return { score: 2, label: "Est. architectural shingle" };
-}
-
-// ── CSV parser ────────────────────────────────────────────────────────────────
-function parseCSV(text) {
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
-  if (!lines.length) return [];
-  const parseRow = row => {
-    const out = []; let cell = "", inQ = false;
-    for (let i = 0; i < row.length; i++) {
-      const c = row[i];
-      if (c === '"') { inQ && row[i+1] === '"' ? (cell += '"', i++) : (inQ = !inQ); }
-      else if (c === ',' && !inQ) { out.push(cell.trim()); cell = ""; }
-      else cell += c;
-    }
-    out.push(cell.trim());
-    return out;
-  };
-  const headers = parseRow(lines[0]);
-  return lines.slice(1).map(line => {
-    const vals = parseRow(line), obj = {};
-    headers.forEach((h, i) => { obj[h] = vals[i] ?? ""; });
-    return obj;
-  });
-}
-
-// Normalise a raw CSV row — handles both Cook County dataset column names
-function normaliseRow(row) {
-  return {
-    address : row.prop_address_full   || row.property_address || row.address || row.Address || "",
-    city    : row.prop_address_city_name || row.property_city || row.city || row.City || "",
-    zip     : row.prop_address_zipcode_1 || row.property_zip  || row.zip_code || row.zip || "",
-    owner   : row.owner_address_name  || row.mailing_name || row.owner || "",
-    year    : row.year_built || row["Year Built"] || row.year || "",
-    value   : row.av_total   || row["Assessed Value"] || row.value || "",
-    cls     : row.class || row.Class || "",
-    pin     : row.pin   || row.PIN   || "",
-  };
-}
+import { AREA_MAP, COOK_AREAS, OTHER_AREAS, STORM_EVENTS, DEFAULT_WEIGHTS, WEIGHT_LABELS } from "./constants";
+import { parseCSV, normaliseRow } from "./utils/parsers";
+import { scoreProperty, filterByValue } from "./utils/scoring";
+import { fetchHistoricalAlerts, fetchLiveAlerts, fetchHWO, fetchStormHistory as fetchStormHistoryApi } from "./utils/stormApi";
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 // Fonts loaded via <link> in index.html (preconnect + non-blocking)
@@ -302,133 +190,28 @@ export default function StormLeads() {
   // Derived
   const area = AREA_MAP.find(a => a.label === selectedArea);
 
-  // ── IEM Historical Storm Reports (Local Storm Reports) ───────────────────────
-  // Queries the Iowa Environmental Mesonet archive for NOAA-verified ground reports
-  // (spotter-confirmed hail size, wind gusts, tornadoes) for a given date.
-  const fetchHistoricalAlerts = async (dateStr) => {
-    const d    = new Date(dateStr + "T12:00:00");
-    const next = new Date(d); next.setDate(next.getDate() + 1);
-    const pad  = n => String(n).padStart(2, "0");
-    const url  =
-      `https://mesonet.agron.iastate.edu/geojson/lsr.geojson` +
-      `?syear=${d.getFullYear()}&smonth=${pad(d.getMonth()+1)}&sday=${pad(d.getDate())}` +
-      `&eyear=${next.getFullYear()}&emonth=${pad(next.getMonth()+1)}&eday=${pad(next.getDate())}` +
-      `&wfo=LOT`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`IEM API returned ${res.status}`);
-    const json = await res.json();
-    return (json.features || []).filter(f => {
-      const st = (f.properties?.state  || "").toUpperCase();
-      const co = (f.properties?.county || "").toUpperCase();
-      return st === "IL" && ["COOK","DUPAGE","LAKE","WILL"].some(c => co.includes(c));
-    });
-  };
-
-  // ── IEM 5-Year Storm History ─────────────────────────────────────────────────
-  // Counts unique storm days per service area over the past 5 years using IEM LSR archive.
-  // Groups by calendar date to avoid inflating counts from multiple reports on the same storm.
+  // ── Storm history wrapper — delegates to util, manages loading state ──────────
   const fetchStormHistory = async () => {
     setLoadingHistory(true);
     try {
-      const now  = new Date();
-      const then = new Date(now); then.setFullYear(now.getFullYear() - 5);
-      const pad  = n => String(n).padStart(2, "0");
-      const url  =
-        `https://mesonet.agron.iastate.edu/geojson/lsr.geojson` +
-        `?syear=${then.getFullYear()}&smonth=${pad(then.getMonth()+1)}&sday=${pad(then.getDate())}` +
-        `&eyear=${now.getFullYear()}&emonth=${pad(now.getMonth()+1)}&eday=${pad(now.getDate())}` +
-        `&wfo=LOT`;
-      const res  = await fetch(url);
-      if (!res.ok) throw new Error();
-      const json = await res.json();
-
-      // Sets of unique storm days per area to avoid over-counting
-      const hitDays = {};
-      AREA_MAP.forEach(a => { hitDays[a.label] = new Set(); });
-
-      for (const f of (json.features || [])) {
-        const p  = f.properties || {};
-        if ((p.state || "").toUpperCase() !== "IL") continue;
-        const co = (p.county || "").toUpperCase();
-        if (!["COOK","DUPAGE","LAKE","WILL"].some(c => co.includes(c))) continue;
-
-        // Only count significant events
-        const type = (p.typetext || "").toUpperCase();
-        const mag  = parseFloat(p.magnitude) || 0;
-        if (type.includes("HAIL") && mag < 0.75) continue;
-        if (type.includes("WIND") && !type.includes("TORNADO") && mag < 45) continue;
-        if (!type.includes("HAIL") && !type.includes("WIND") && !type.includes("TORNADO")) continue;
-
-        const city    = (p.city || "").toUpperCase();
-        const dateKey = (p.valid || "").slice(0, 10);
-
-        for (const a of AREA_MAP) {
-          if ((a.city && city.includes(a.city)) || city.includes(a.label.toUpperCase()) ||
-              a.label.toUpperCase().split(" ").some(w => w.length > 3 && city.includes(w))) {
-            hitDays[a.label].add(dateKey);
-          }
-        }
-      }
-
-      const result = {};
-      AREA_MAP.forEach(a => { result[a.label] = hitDays[a.label].size; });
+      const result = await fetchStormHistoryApi();
       setStormHistory(result);
     } catch { /* silent — history is supplemental */ }
     setLoadingHistory(false);
   };
 
-  // ── NWS ────────────────────────────────────────────────────────────────────
-  const fetchHWO = async () => {
-    try {
-      const listRes = await fetch("https://api.weather.gov/products/types/HWO/locations/LOT", {
-        headers: { "User-Agent": "(StormLeads, storm-leads-app)" }
-      });
-      const listJson = await listRes.json();
-      const latest = listJson["@graph"]?.[0];
-      if (!latest) return;
-      const prodRes = await fetch(latest["@id"], {
-        headers: { "User-Agent": "(StormLeads, storm-leads-app)" }
-      });
-      const prodJson = await prodRes.json();
-      const text = prodJson.productText || "";
-      const lower = text.toLowerCase();
-      const hailMentioned = lower.includes("hail");
-      const severeMentioned = lower.includes("severe") || lower.includes("damaging wind") || lower.includes("tornado");
-      // Pull 1-2 relevant lines as a summary
-      const lines = text.split("\n").map(l => l.trim()).filter(l =>
-        l.toLowerCase().includes("hail") || l.toLowerCase().includes("severe") || l.toLowerCase().includes("thunderstorm")
-      );
-      const summary = lines.slice(0, 2).join(" ").replace(/\s+/g, " ").trim().slice(0, 220);
-      setHwo({ hailMentioned, severeMentioned, summary });
-    } catch { /* silent — HWO is supplemental */ }
-  };
-
+  // ── Alert fetching — delegates to stormApi utils ───────────────────────────
   const fetchAlerts = async () => {
     setFetchingAlerts(true);
     setAlerts([]);
     try {
       if (stormDate) {
-        // ── Historical mode — IEM Local Storm Reports ──────────────────────
-        const features = await fetchHistoricalAlerts(stormDate);
-        setAlerts(features.map(lsrToAlert));
+        setAlerts(await fetchHistoricalAlerts(stormDate));
         setIsHistorical(true);
       } else {
-        // ── Live mode — NWS Active Alerts ─────────────────────────────────
-        const [res] = await Promise.all([
-          fetch("https://api.weather.gov/alerts/active?area=IL&status=actual&limit=50", {
-            headers: { "User-Agent": "(StormLeads, storm-leads-app)" }
-          }),
-          fetchHWO(),
-        ]);
-        const json = await res.json();
-        const names    = AREA_MAP.map(a => a.label.toLowerCase());
-        const counties = ["cook","dupage","lake","will"];
-        setAlerts((json.features || []).filter(f => {
-          const ev = (f.properties.event    || "").toLowerCase();
-          const ar = (f.properties.areaDesc || "").toLowerCase();
-          return STORM_EVENTS.some(k => ev.includes(k.toLowerCase())) &&
-            (names.some(n => ar.includes(n)) || counties.some(c => ar.includes(c)));
-        }));
+        const [liveAlerts, hwoResult] = await Promise.all([fetchLiveAlerts(), fetchHWO()]);
+        setAlerts(liveAlerts);
+        setHwo(hwoResult);
         setIsHistorical(false);
       }
     } catch { setAlerts([]); }
@@ -549,7 +332,7 @@ export default function StormLeads() {
       const newMerged = merged.filter(r => !r.pin || !pulledPins.has(r.pin));
       const dupCount  = merged.length - newMerged.length;
 
-      const filtered = filterByValue(newMerged);
+      const filtered = filterByValue(newMerged, minValue, maxValue);
       setPullStatus(
         `Enriched ${matchCount}/${addrNorm.length} · ` +
         `Roof: ${roofCount} verified, ${roofEst} estimated · ` +
@@ -560,7 +343,7 @@ export default function StormLeads() {
 
       setRows(filtered);
       const alertInfo = getAlertScore();
-      const scored = filtered.map(r => scoreProperty(r, alertInfo)).sort((a, b) => b.score - a.score);
+      const scored = filtered.map(r => scoreProperty(r, alertInfo, weights, maxYear)).sort((a, b) => b.score - a.score);
       setLeads(scored);
       // Register these PINs as pulled so re-pulls suppress duplicates
       setPulledPins(prev => new Set([...prev, ...newMerged.map(r => r.pin).filter(Boolean)]));
@@ -588,21 +371,6 @@ export default function StormLeads() {
       setPullError("");
     };
     reader.readAsText(file);
-  };
-
-  // ── Value filter — user sets market value range, we convert to AV (÷ ~3.5) ─
-  const filterByValue = (properties) => {
-    if (!minValue && !maxValue) return properties;
-    // Cook County AV ≈ 10% of market, but ratio varies; use ~28% as rough AV/market
-    // Simpler: just multiply AV by 3.3 to estimate market value
-    return properties.filter(r => {
-      const av = parseInt(r.value);
-      if (!av || av <= 0) return true; // keep unknowns — don't exclude potential leads
-      const estMarket = av * 3.3;
-      if (minValue && estMarket < minValue) return false;
-      if (maxValue && estMarket > maxValue) return false;
-      return true;
-    });
   };
 
   // ── Area-level storm severity — scores each service area independently ──────
@@ -685,81 +453,11 @@ export default function StormLeads() {
     });
   }, [leads, sortMode]);
 
-  const scoreProperty = (r, alertInfo) => {
-    const reasons = [];
-    const factors = {};
-    const thisYear = new Date().getFullYear();
-
-    // Roof Age (0-3)
-    const yr = parseInt(r.year);
-    if (yr >= 1960 && yr <= 1990) { factors.roofAge = 3; reasons.push(`Built ${yr} (prime age)`); }
-    else if (yr >= 1991 && yr <= 2005) { factors.roofAge = 2; reasons.push(`Built ${yr}`); }
-    else if (yr > 2005 && yr <= maxYear) { factors.roofAge = 1; reasons.push(`Built ${yr}`); }
-    else { factors.roofAge = 1; reasons.push(yr > 0 ? `Built ${yr}` : "Year unknown"); }
-
-    // Property Value (0-3)
-    const av = parseInt(r.value);
-    if (av >= 60000 && av <= 180000) { factors.propertyValue = 3; reasons.push(`AV $${av.toLocaleString()}`); }
-    else if (av > 180000) { factors.propertyValue = 2; reasons.push(`AV $${av.toLocaleString()} (high-end)`); }
-    else if (av > 0) { factors.propertyValue = 1; reasons.push(`AV $${av.toLocaleString()}`); }
-    else { factors.propertyValue = 1; reasons.push("AV unknown"); }
-
-    // Storm Severity (0-3)
-    factors.stormSeverity = alertInfo.pts;
-    if (alertInfo.pts > 0) reasons.push(alertInfo.label);
-
-    // Roof Material (0-3) — verified Cook County data first, year-based inference fallback
-    const mat = (r.roofMaterial || "").toLowerCase();
-    const matScore = mat ? Object.entries(ROOF_VULN).reduce((best, [kw, s]) => mat.includes(kw) ? Math.max(best, s) : best, -1) : -1;
-    let roofLabel = "";
-    if (matScore >= 0) {
-      factors.roofMaterial = matScore;
-      roofLabel = `${r.roofMaterial}${matScore===0?" (durable)":""}`;
-      reasons.push(`${roofLabel} ✓`);
-    } else {
-      const inf = inferRoofMaterial(yr);
-      factors.roofMaterial = inf.score;
-      roofLabel = inf.label + " (est.)";
-      reasons.push(roofLabel);
-    }
-
-    // Permit History (0-3)
-    const permitYr = parseInt(r.lastPermitYear);
-    if (!permitYr) { factors.permitAge = 2; reasons.push("No roof permit found"); }
-    else if (thisYear - permitYr > 15) { factors.permitAge = 3; reasons.push(`Last permit ${permitYr} (aged)`); }
-    else if (thisYear - permitYr > 10) { factors.permitAge = 2; reasons.push(`Last permit ${permitYr}`); }
-    else if (thisYear - permitYr > 5) { factors.permitAge = 1; reasons.push(`Permit ${permitYr}`); }
-    else { factors.permitAge = 0; reasons.push(`Recent permit ${permitYr}`); }
-
-    // Weighted score: each factor 0-3, weights 1-5, normalize to 0-10
-    let totalWeight = 0, totalScore = 0;
-    for (const [key, raw] of Object.entries(factors)) {
-      const w = weights[key] || 0;
-      totalWeight += w;
-      totalScore += raw * w;
-    }
-    const score = totalWeight > 0 ? Math.min(10, Math.round((totalScore / totalWeight) * (10 / 3))) : 0;
-
-    // Plain-English lead summary
-    const sumParts = [];
-    if (yr > 0) sumParts.push(`${thisYear - yr}yr old`);
-    if (roofLabel) sumParts.push(roofLabel.toLowerCase() + " roof");
-    if (av > 0) sumParts.push(`~$${Math.round(av * 3.3 / 1000)}k est. value`);
-    if (permitYr && thisYear - permitYr > 15) sumParts.push(`roof permit expired ${permitYr}`);
-    else if (!permitYr) sumParts.push("no roof permits on file");
-    if (alertInfo.pts >= 2) sumParts.push("storm-impacted area");
-    const summary = sumParts.length ? sumParts.join(", ") : "";
-
-    const tier = score >= 7 ? "HIGH" : score >= 4 ? "MEDIUM" : "LOW";
-    const address = [r.address, r.city, r.zip].filter(Boolean).join(", ") || r.pin || "unknown";
-    return { pin: r.pin || "", address, score, tier, reason: reasons.join(" · "), summary };
-  };
-
   const scoreLeads = (switchTab = true) => {
     if (!rows.length) return;
-    const filtered = filterByValue(rows);
+    const filtered = filterByValue(rows, minValue, maxValue);
     const alertInfo = getAlertScore();
-    const scored = filtered.map(r => scoreProperty(r, alertInfo))
+    const scored = filtered.map(r => scoreProperty(r, alertInfo, weights, maxYear))
       .sort((a, b) => b.score - a.score);
     setLeads(scored);
     if (switchTab) setTab("results");
