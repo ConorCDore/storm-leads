@@ -128,7 +128,7 @@ export default function Dashboard({
           ))}
           <button className="btn sm outline"
             style={{marginTop:10,width:"100%",justifyContent:"center"}}
-            onClick={() => setTab(leads.length > 0 ? "leads" : "storm")}>
+            onClick={() => setTab((leads.length > 0 || globalLeads.length > 0) ? "leads" : "storm")}>
             {leads.length > 0 ? `View All ${leads.length} Leads →` : "Scouting found motivated prospects — Go to Leads tab"}
           </button>
         </div>
