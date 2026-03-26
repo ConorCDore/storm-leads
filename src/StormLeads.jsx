@@ -3,7 +3,7 @@ import { AREA_MAP, COOK_AREAS, OTHER_AREAS, STORM_EVENTS, DEFAULT_WEIGHTS, WEIGH
 import { parseCSV, normaliseRow } from "./utils/parsers";
 import { scoreProperty, filterByValue } from "./utils/scoring";
 import { fetchHistoricalAlerts, fetchLiveAlerts, fetchHWO, fetchStormHistory as fetchStormHistoryApi } from "./utils/stormApi";
-import { fetchAddressesByCity, fetchAddressesByZip, enrichAddresses, classifyMotivation } from "./utils/cookCountyApi";
+import { fetchAddressesByCity, fetchAddressesByZip, fetchGlobalMotivatedLeads, enrichAddresses, classifyMotivation } from "./utils/cookCountyApi";
 import Dashboard  from "./components/Dashboard";
 import Settings   from "./components/Settings";
 import LeadsGrid  from "./components/LeadsGrid";
