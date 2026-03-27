@@ -129,6 +129,7 @@ export function scoreProperty(r, alertInfo, weights, maxYear = 2010, motivation 
   const estValue = av > 0 ? Math.round(av * 3.3) : 0;
   const yearBuilt = yr > 0 ? yr : 0;
   const roofAge = yr > 0 ? thisYear - yr : 0;
+  const ownerName = r.ownerName || "";
 
-  return { pin: r.pin || "", address, score, tier, reason: reasons.join(" · "), summary, breakdown, motivation, estValue, yearBuilt, roofAge };
+  return { pin: r.pin || "", address, score, tier, reason: reasons.join(" · "), summary, breakdown, motivation, estValue, yearBuilt, roofAge, ownerName };
 }

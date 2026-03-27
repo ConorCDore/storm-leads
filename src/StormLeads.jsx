@@ -14,7 +14,10 @@ const StormMap = lazy(() => import("./components/StormMap"));
 const CSS = `
   *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
   .app { min-height:100vh; background:#080c10; color:#d4cfc8; font-family:'DM Mono',monospace; font-size:13px; padding:20px 16px 40px; background-image:radial-gradient(ellipse 80% 40% at 50% -10%, rgba(251,146,60,.07) 0%, transparent 70%); }
+  .app.light { background:#f5f3ef; color:#1f2937; background-image:none; }
   .wrap { max-width:600px; margin:0 auto; }
+  @media (min-width: 900px) { .wrap { max-width:880px; } }
+  @media (min-width: 1200px) { .wrap { max-width:1100px; } }
 
   /* Header */
   .hd { text-align:center; margin-bottom:22px; }
@@ -161,6 +164,58 @@ const CSS = `
   .sev-badge.s3 { background:rgba(239,68,68,.15); color:#ef4444; }
   .sev-badge.s2 { background:rgba(251,146,60,.15); color:#fb923c; }
   .sev-badge.s1 { background:rgba(132,204,22,.15); color:#84cc16; }
+
+  /* Desktop lead grid — 2-col on medium, 3-col on wide */
+  @media (min-width: 900px) {
+    .lead-grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
+    .lead-grid .lead { margin-bottom:0; }
+    .stats { grid-template-columns:repeat(4,1fr) !important; }
+  }
+  @media (min-width: 1200px) {
+    .lead-grid { grid-template-columns:1fr 1fr 1fr; }
+  }
+
+  /* Progress bar */
+  .pull-progress { width:100%; height:6px; background:rgba(251,146,60,.12); border-radius:3px; overflow:hidden; margin-top:8px; }
+  .pull-progress-fill { height:100%; background:#fb923c; border-radius:3px; transition:width .4s ease; }
+
+  /* Theme toggle */
+  .theme-toggle { position:fixed; top:14px; right:14px; z-index:100; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1); border-radius:50%; width:32px; height:32px; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:14px; transition:all .15s; }
+  .theme-toggle:hover { background:rgba(251,146,60,.15); border-color:rgba(251,146,60,.3); }
+
+  /* ── Light theme overrides ── */
+  .app.light .card { background:rgba(0,0,0,.02); border-color:rgba(0,0,0,.1); }
+  .app.light .tabs { background:rgba(0,0,0,.03); border-color:rgba(0,0,0,.1); }
+  .app.light .tab { color:#6b7280; }
+  .app.light .tab.on { background:#fb923c; color:#fff; }
+  .app.light .tab:hover:not(.on) { color:#fb923c; }
+  .app.light select, .app.light input[type=number], .app.light input[type=date] { background:#fff; border-color:rgba(0,0,0,.15); color:#1f2937; }
+  .app.light input[type=date] { color-scheme:light; }
+  .app.light .lead { background:rgba(0,0,0,.02); }
+  .app.light .lead.hi { border-color:#ef4444; background:rgba(239,68,68,.04); }
+  .app.light .lead.md { border-color:#fb923c; background:rgba(251,146,60,.04); }
+  .app.light .lead.lo { border-color:#9ca3af; background:rgba(0,0,0,.02); }
+  .app.light .lead-addr { color:#111827; }
+  .app.light .lead-why { color:#6b7280; }
+  .app.light .score-box { background:rgba(0,0,0,.03); border-color:rgba(0,0,0,.08); }
+  .app.light .stat { background:rgba(0,0,0,.02); border-color:rgba(0,0,0,.08); }
+  .app.light .stat-l { color:#6b7280; }
+  .app.light .btn { color:#fff; }
+  .app.light .btn.outline { color:#fb923c; background:transparent; }
+  .app.light .field-lbl { color:#6b7280; }
+  .app.light .sub { color:#9ca3af; }
+  .app.light .note { border-color:rgba(0,0,0,.08); color:#6b7280; }
+  .app.light .note b { color:#374151; }
+  .app.light .al { background:rgba(0,0,0,.02); }
+  .app.light .sev-row { background:rgba(0,0,0,.02); }
+  .app.light .empty { color:#9ca3af; }
+  .app.light .pill { background:rgba(251,146,60,.08); border-color:rgba(251,146,60,.2); }
+  .app.light .lbl { color:#ea580c; }
+  .app.light .theme-toggle { background:rgba(0,0,0,.04); border-color:rgba(0,0,0,.1); }
+  .app.light .prog-seg { background:rgba(251,146,60,.15); }
+  .app.light .wt-lbl { color:#4b5563; }
+  .app.light input[type=range] { background:rgba(251,146,60,.2); }
+  .app.light .lead-sum { color:#ea580c; }
 `;
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -195,6 +250,8 @@ export default function StormLeads() {
   const [sortMode,       setSortMode]       = useState("score"); // "score" | "route"
   const [selectedZips,   setSelectedZips]   = useState([]);  // ZIP codes chosen on map
   const [showMap,        setShowMap]        = useState(false);
+  const [theme,          setTheme]          = useState(() => localStorage.getItem("sl-theme") || "dark");
+  const [pullProgress,   setPullProgress]   = useState(0); // 0-100
   const fileRef = useRef();
 
   // Inject CSS once (avoids React diffing ~6KB string every render)
@@ -207,6 +264,12 @@ export default function StormLeads() {
       document.head.appendChild(el);
     }
   }, []);
+
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    localStorage.setItem("sl-theme", next);
+  };
 
   // Derived
   const isHistorical   = dateMode !== "live";
@@ -260,8 +323,9 @@ export default function StormLeads() {
   // ── Shared enrichment + scoring step ─────────────────────────────────────────
   // Called by both pullAndScore (city-based) and pullByZips (map-based).
   const finishPull = async (addrNorm) => {
+    setPullProgress(0);
     const { merged, matchCount, roofCount, permitCount } =
-      await enrichAddresses(addrNorm, setPullStatus);
+      await enrichAddresses(addrNorm, setPullStatus, setPullProgress);
     const roofEst   = merged.length - roofCount;
     const newMerged = merged.filter(r => !r.pin || !pulledPins.has(r.pin));
     const dupCount  = merged.length - newMerged.length;
@@ -507,7 +571,10 @@ export default function StormLeads() {
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
-      <div className="app">
+      <div className={`app${theme === "light" ? " light" : ""}`}>
+        <button className="theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>
+          {theme === "dark" ? "☀️" : "🌙"}
+        </button>
         <div className="wrap">
 
           {/* Header */}
@@ -969,7 +1036,14 @@ export default function StormLeads() {
                     {pulling ? <><span className="sp sp-or"/> Pulling…</> : `Pull & Score ${selectedArea} →`}
                   </button>
                   {pullStatus && !pullError && (
-                    <div style={{fontSize:".63rem",color:"#10b981",marginTop:8}}>{pullStatus}</div>
+                    <div style={{marginTop:8}}>
+                      <div style={{fontSize:".63rem",color:"#10b981"}}>{pullStatus}</div>
+                      {pulling && pullProgress > 0 && pullProgress < 100 && (
+                        <div className="pull-progress">
+                          <div className="pull-progress-fill" style={{width:`${pullProgress}%`}}/>
+                        </div>
+                      )}
+                    </div>
                   )}
                   {pullError && (
                     <div style={{fontSize:".68rem",color:"#ef4444",background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.2)",borderRadius:3,padding:"8px 10px",marginTop:8}}>

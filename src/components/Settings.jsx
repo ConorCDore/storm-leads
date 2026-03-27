@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { DEFAULT_WEIGHTS, WEIGHT_LABELS } from "../constants";
+import { DEFAULT_WEIGHTS, WEIGHT_LABELS, WEIGHT_HINTS } from "../constants";
 
 export default function Settings({ weights, setWeights, leads, scoreLeads }) {
   const [propStreamKey, setPropStreamKey] = useState("");
@@ -22,13 +22,20 @@ export default function Settings({ weights, setWeights, leads, scoreLeads }) {
         </div>
 
         {Object.entries(WEIGHT_LABELS).map(([key, label]) => (
-          <div key={key} className="wt-row">
-            <span className="wt-lbl">{label}</span>
-            <input
-              type="range" min={0} max={5} value={weights[key]}
-              onChange={e => setWeights(w => ({...w, [key]: +e.target.value}))}
-            />
-            <span className="wt-val">{weights[key]}</span>
+          <div key={key} style={{marginBottom:12}}>
+            <div className="wt-row" style={{marginBottom:2}}>
+              <span className="wt-lbl">{label}</span>
+              <input
+                type="range" min={0} max={5} value={weights[key]}
+                onChange={e => setWeights(w => ({...w, [key]: +e.target.value}))}
+              />
+              <span className="wt-val">{weights[key]}</span>
+            </div>
+            {WEIGHT_HINTS[key] && (
+              <div style={{fontSize:".58rem",color:"#4b5563",marginLeft:108,lineHeight:1.5}}>
+                {weights[key] === 0 ? "Disabled — this factor won't affect scores" : WEIGHT_HINTS[key]}
+              </div>
+            )}
           </div>
         ))}
 

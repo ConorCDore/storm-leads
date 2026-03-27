@@ -42,7 +42,7 @@ export async function fetchAddressesByZip(zips, limit) {
 // addrNorm  — already-normalised address rows from normaliseRow()
 // onStatus  — optional progress callback (msg: string) => void
 // Returns { merged[], matchCount, roofCount, permitCount }
-export async function enrichAddresses(addrNorm, onStatus = () => { }) {
+export async function enrichAddresses(addrNorm, onStatus = () => { }, onProgress = () => { }) {
   const pins = addrNorm.map(r => r.pin).filter(Boolean);
   const thisYear = new Date().getFullYear();
   const assessMap = new Map();
@@ -50,6 +50,7 @@ export async function enrichAddresses(addrNorm, onStatus = () => { }) {
   const roofMap = new Map();
   const permitMap = new Map();
   const saleMap = new Map();
+  const totalBatches = Math.ceil(pins.length / PIN_BATCH);
 
   // Build parallel fetches — 5 requests per PIN batch
   const fetches = [];
@@ -76,10 +77,15 @@ export async function enrichAddresses(addrNorm, onStatus = () => { }) {
   }
 
   onStatus(`Fetching details for ${pins.length} properties (5 datasets)…`);
+  onProgress(10); // started
   const results = await Promise.all(fetches);
+  onProgress(50); // all fetches complete
 
-  // Process results — 4 per batch group: assess[0] bldg[1] roof[2] permit[3]
+  // Process results — 5 per batch group: assess[0] bldg[1] roof[2] permit[3] sale[4]
   for (let i = 0; i < results.length; i++) {
+    // Report progress as we parse each response
+    const pct = 50 + Math.round((i / results.length) * 40);
+    onProgress(pct);
     const res = results[i];
     if (!res?.ok) continue;
     const data = await res.json();
@@ -121,6 +127,8 @@ export async function enrichAddresses(addrNorm, onStatus = () => { }) {
       }
     }
   }
+
+  onProgress(95);
 
   // Merge enrichment data onto address rows
   const merged = addrNorm.map(r => {

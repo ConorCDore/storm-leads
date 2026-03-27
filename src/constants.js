@@ -65,3 +65,12 @@ export const WEIGHT_LABELS = {
   permitAge: "Permit History",
   motivation: "Owner Motivation",
 };
+
+export const WEIGHT_HINTS = {
+  roofAge: "Older homes = older roofs. Pre-1990 scores highest — prime replacement age",
+  propertyValue: "Mid-range homes ($200k–$600k) most likely to file insurance. Higher = prioritize them",
+  stormSeverity: "How much active storm data drives the score. Crank this up during active storms",
+  roofMaterial: "Asphalt/shingle roofs are most vulnerable. Metal/slate are durable (score low)",
+  permitAge: "No recent roof permit = likely original or aged roof. Higher = favor those leads",
+  motivation: "LLCs, flippers, absentee owners are faster decisions. Higher = prioritize motivated buyers",
+};

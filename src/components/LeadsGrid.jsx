@@ -67,14 +67,21 @@ export default function LeadsGrid({
   }, [leads]);
 
   // ── CSV download ─────────────────────────────────────────────────────────────
+  const esc = v => `"${String(v || "").replace(/"/g, '""')}"`;
   const exportCSV = () => {
-    const header = "Address,Score,Tier,Summary,Reason\n";
+    const header = "Address,PIN,Score,Tier,Est. Value,Year Built,Roof Age,Motivation,Owner,Summary,Reason\n";
     const rows   = leads.map(l => [
-      `"${(l.address || "").replace(/"/g, '""')}"`,
+      esc(l.address),
+      esc(l.pin),
       l.score,
       l.tier,
-      `"${(l.summary  || "").replace(/"/g, '""')}"`,
-      `"${(l.reason   || "").replace(/"/g, '""')}"`,
+      l.estValue || "",
+      l.yearBuilt || "",
+      l.roofAge || "",
+      l.motivation?.tier || "STANDARD",
+      esc(l.ownerName || ""),
+      esc(l.summary),
+      esc(l.reason),
     ].join(",")).join("\n");
 
     const blob = new Blob([header + rows], { type: "text/csv;charset=utf-8;" });
@@ -221,20 +228,26 @@ export default function LeadsGrid({
 
       {/* ── Lead list ── */}
       {sortMode === "route" ? (
-        filteredDisplay.map((l, i) => <LeadCard key={i} lead={l} />)
+        <div className="lead-grid">
+          {filteredDisplay.map((l, i) => <LeadCard key={i} lead={l} />)}
+        </div>
       ) : isScoreSort ? (
         [["HIGH", fHi, "hi", "🔴"], ["MEDIUM", fMd, "md", "🟡"], ["LOW", fLo, "lo", "🟢"]].map(
           ([tier, list, cls, ico]) =>
             list.length > 0 && (
               <div key={tier}>
                 <div className={`tier-h ${cls}`}>{ico} {tier} — {list.length}</div>
-                {list.map((l, i) => <LeadCard key={i} lead={l} />)}
+                <div className="lead-grid">
+                  {list.map((l, i) => <LeadCard key={i} lead={l} />)}
+                </div>
               </div>
             )
         )
       ) : (
         /* Flat sorted list (non-score sort — no tier grouping) */
-        sortedFiltered.map((l, i) => <LeadCard key={i} lead={l} />)
+        <div className="lead-grid">
+          {sortedFiltered.map((l, i) => <LeadCard key={i} lead={l} />)}
+        </div>
       )}
     </>
   );
