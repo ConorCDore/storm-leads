@@ -11,25 +11,33 @@ export function inferRoofMaterial(yr) {
 }
 
 // ── Property class filter ─────────────────────────────────────────────────────
-// Cook County class codes: 2xx = residential, 3xx = multi-family/condo,
-// 1xx = vacant land, 5xx = commercial/industrial, 0/9 = exempt
-// We keep only residential single-family (class 2xx) plus unknowns.
-const EXCLUDED_CLASSES = new Set([
-  "300","313","314","315","318","390","399",   // condos, co-ops
-  "100","190","199","241",                      // vacant land
-  "500","501","517","522","523","525","526","527","528","529","535","550","590","591","592","597","599", // commercial
-  "900","000",                                  // exempt / unknown-exempt
-]);
+// Cook County class codes grouped into operator-friendly categories.
+// allowedTypes: Set of category keys the operator has toggled on.
+export const PROPERTY_TYPES = {
+  residential:  { label: "🏠 Residential",  prefix: "2", desc: "Single-family homes (Class 2xx)" },
+  condo:        { label: "🏢 Condo/Multi",  prefix: "3", desc: "Condos, co-ops, multi-family (Class 3xx)" },
+  commercial:   { label: "🏪 Commercial",   prefix: "5", desc: "Commercial & industrial (Class 5xx)" },
+  vacant:       { label: "🌿 Vacant Land",  prefix: "1", desc: "Vacant lots (Class 1xx)" },
+  exempt:       { label: "⛪ Exempt",        prefix: "9", desc: "Tax-exempt — churches, gov't (Class 9xx)" },
+};
 
-export function filterByClass(properties) {
+export const DEFAULT_PROP_TYPES = new Set(["residential"]); // sensible default
+
+export function filterByClass(properties, allowedTypes = DEFAULT_PROP_TYPES) {
+  // If all types are on, skip filtering entirely
+  if (allowedTypes.size === Object.keys(PROPERTY_TYPES).length) return properties;
+
+  const allowedPrefixes = new Set();
+  for (const key of allowedTypes) {
+    const pt = PROPERTY_TYPES[key];
+    if (pt) allowedPrefixes.add(pt.prefix);
+  }
+
   return properties.filter(r => {
     const cls = (r.cls || "").replace(/\D/g, "").slice(0, 3);
-    if (!cls) return true; // keep unknowns
-    if (EXCLUDED_CLASSES.has(cls)) return false;
-    // Also exclude any 3xx (condo/multi), 5xx (commercial), 1xx (vacant) generically
+    if (!cls) return true; // keep unknowns — don't exclude potential leads
     const prefix = cls.charAt(0);
-    if (prefix === "3" || prefix === "5" || prefix === "1" || prefix === "9") return false;
-    return true;
+    return allowedPrefixes.has(prefix);
   });
 }
 

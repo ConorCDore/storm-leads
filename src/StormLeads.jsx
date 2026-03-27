@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, lazy, Suspense } from "react";
 import { AREA_MAP, COOK_AREAS, OTHER_AREAS, STORM_EVENTS, DEFAULT_WEIGHTS, WEIGHT_LABELS, CITY_ZIPS } from "./constants";
 import { parseCSV, normaliseRow } from "./utils/parsers";
-import { scoreProperty, filterByValue, filterByClass } from "./utils/scoring";
+import { scoreProperty, filterByValue, filterByClass, PROPERTY_TYPES, DEFAULT_PROP_TYPES } from "./utils/scoring";
 import { fetchHistoricalAlerts, fetchLiveAlerts, fetchHWO, fetchStormHistory as fetchStormHistoryApi } from "./utils/stormApi";
 import { fetchAddressesByCity, fetchAddressesByZip, getGlobalMotivatedLeads, enrichAddresses, classifyMotivation } from "./utils/cookCountyApi";
 import Dashboard  from "./components/Dashboard";
@@ -264,6 +264,10 @@ export default function StormLeads() {
   const [stormHistory,   setStormHistory]   = useState({});  // area label → storm day count (5yr)
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [minHailSize,    setMinHailSize]    = useState(0);   // 0 = no filter
+  const [propTypes,      setPropTypes]      = useState(() => {
+    // Restore from saved state or use default
+    return new Set(_saved.propTypes || DEFAULT_PROP_TYPES);
+  });
   const [sortMode,       setSortMode]       = useState("score"); // "score" | "route"
   const [selectedZips,   setSelectedZips]   = useState([]);  // ZIP codes chosen on map
   const [showMap,        setShowMap]        = useState(false);
@@ -292,11 +296,12 @@ export default function StormLeads() {
           alerts, alertsDone, selectedArea, maxYear, limit, minValue, maxValue,
           leads, weights, globalLeads,
           pulledPins: [...pulledPins],
+          propTypes: [...propTypes],
         }));
       } catch { /* quota exceeded — non-fatal */ }
     }, 500);
     return () => clearTimeout(t);
-  }, [alerts, alertsDone, selectedArea, maxYear, limit, minValue, maxValue, leads, weights, globalLeads, pulledPins]);
+  }, [alerts, alertsDone, selectedArea, maxYear, limit, minValue, maxValue, leads, weights, globalLeads, pulledPins, propTypes]);
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -362,7 +367,7 @@ export default function StormLeads() {
     const roofEst   = merged.length - roofCount;
     const newMerged = merged.filter(r => !r.pin || !pulledPins.has(r.pin));
     const dupCount  = merged.length - newMerged.length;
-    const afterClass = filterByClass(newMerged);
+    const afterClass = filterByClass(newMerged, propTypes);
     const classFiltered = newMerged.length - afterClass.length;
     const filtered  = filterByValue(afterClass, minValue, maxValue);
     const valueFiltered = afterClass.length - filtered.length;
@@ -528,7 +533,7 @@ export default function StormLeads() {
 
   const scoreLeads = (switchTab = true) => {
     if (!rows.length) return;
-    const filtered = filterByValue(filterByClass(rows), minValue, maxValue);
+    const filtered = filterByValue(filterByClass(rows, propTypes), minValue, maxValue);
     const alertInfo = getAlertScore();
     const scored = filtered.map(r => {
       const motivation = classifyMotivation(r);
@@ -1037,6 +1042,34 @@ export default function StormLeads() {
                 </div>
               </div>
 
+              {/* Property type toggles */}
+              <div style={{marginBottom:12}}>
+                <span className="field-lbl" style={{display:"block",marginBottom:5}}>Property Types</span>
+                <div className="row" style={{gap:5}}>
+                  {Object.entries(PROPERTY_TYPES).map(([key, {label, desc}]) => {
+                    const on = propTypes.has(key);
+                    return (
+                      <button key={key} title={desc}
+                        onClick={() => setPropTypes(prev => {
+                          const next = new Set(prev);
+                          if (next.has(key)) { if (next.size > 1) next.delete(key); } // prevent deselecting all
+                          else next.add(key);
+                          return next;
+                        })}
+                        style={{
+                          padding:"4px 9px", fontSize:".63rem", borderRadius:3, cursor:"pointer",
+                          fontFamily:"'Bebas Neue',sans-serif", letterSpacing:".05em",
+                          border: `1px solid ${on ? "rgba(251,146,60,.4)" : "rgba(255,255,255,.08)"}`,
+                          background: on ? "rgba(251,146,60,.12)" : "transparent",
+                          color: on ? "#fb923c" : "#4b5563",
+                        }}>
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
             {area?.township ? (
                 <>
                   {/* Hail threshold warning */}
@@ -1068,6 +1101,9 @@ export default function StormLeads() {
                     {minValue > 0 && <span className="pill">${(minValue/1000)}k+</span>}
                     {maxValue > 0 && <span className="pill">≤ ${maxValue >= 1000000 ? (maxValue/1000000)+"M" : (maxValue/1000)+"k"}</span>}
                     {minHailSize > 0 && <span className="pill">Hail ≥ {minHailSize}"</span>}
+                    {propTypes.size < Object.keys(PROPERTY_TYPES).length && (
+                      <span className="pill">{[...propTypes].map(k => PROPERTY_TYPES[k]?.label || k).join(" + ")}</span>
+                    )}
                   </div>
                   <button className="btn full" onClick={pullAndScore} disabled={pulling}>
                     {pulling ? <><span className="sp sp-or"/> Pulling…</> : `Pull & Score ${selectedArea} →`}
