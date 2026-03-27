@@ -269,7 +269,7 @@ export async function getGlobalMotivatedLeads(cities, limit = 500) {
     `upper(owner_address_name) LIKE '%TRUST%' OR ` +
     `upper(owner_address_name) LIKE '%HOLDINGS%' OR ` +
     `upper(owner_address_name) LIKE '%PROPERTIES%' OR ` +
-    `upper(mail_address_city_name) <> upper(prop_address_city_name)` +
+    `(upper(mail_address_city_name) <> upper(prop_address_city_name) AND upper(mail_address_city_name) IS NOT NULL AND upper(mail_address_city_name) <> '')` +
     `)`
   );
 

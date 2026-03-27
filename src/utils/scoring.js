@@ -38,7 +38,7 @@ export function scoreProperty(r, alertInfo, weights, maxYear = 2010, motivation 
   const yr = parseInt(r.year);
   if (yr > 1850 && yr <= 1990) { factors.roofAge = 3; factorDetails.roofAge = `Built ${yr} (prime age)`; }
   else if (yr >= 1991 && yr <= 2005) { factors.roofAge = 2; factorDetails.roofAge = `Built ${yr}`; }
-  else if (yr > 2005 && yr < 2025) { factors.roofAge = 1; factorDetails.roofAge = `Built ${yr}`; }
+  else if (yr > 2005 && yr < thisYear) { factors.roofAge = 1; factorDetails.roofAge = `Built ${yr}`; }
   else { factors.roofAge = 0; factorDetails.roofAge = "Age Unknown"; }
   reasons.push(factorDetails.roofAge);
 
@@ -125,5 +125,10 @@ export function scoreProperty(r, alertInfo, weights, maxYear = 2010, motivation 
     detail: factorDetails[key] || "",
   }));
 
-  return { pin: r.pin || "", address, score, tier, reason: reasons.join(" · "), summary, breakdown, motivation };
+  // Sortable numeric fields for the leads grid
+  const estValue = av > 0 ? Math.round(av * 3.3) : 0;
+  const yearBuilt = yr > 0 ? yr : 0;
+  const roofAge = yr > 0 ? thisYear - yr : 0;
+
+  return { pin: r.pin || "", address, score, tier, reason: reasons.join(" · "), summary, breakdown, motivation, estValue, yearBuilt, roofAge };
 }

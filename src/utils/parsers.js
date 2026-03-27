@@ -32,7 +32,10 @@ export function normaliseRow(row) {
     zip     : row.prop_address_zipcode_1 || row.property_zip     || row.zip_code || row.zip     || "",
     ownerName : row.owner_address_name      || row.mail_address_name || row.mailing_name || row.owner || "",
     ownerCity : row.owner_address_city_name || row.mail_address_city_name || row.owner_city || row.mailing_city || "",
-    year    : (parseInt(row.year_built || row["Year Built"]) || 0) || (parseInt(row.year) < 2025 ? row.year : ""),
+    year    : (() => {
+      const yr = parseInt(row.year_built || row["Year Built"] || row.year);
+      return yr > 1850 && yr < new Date().getFullYear() ? String(yr) : "";
+    })(),
     value   : row.av_total    || row["Assessed Value"] || row.value || "",
     cls     : row.class || row.Class || "",
     pin     : row.pin   || row.PIN   || "",

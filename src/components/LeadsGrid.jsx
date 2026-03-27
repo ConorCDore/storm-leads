@@ -20,6 +20,7 @@ export default function LeadsGrid({
   const motivatedCount = leads.filter(l => l.motivation?.tier !== "STANDARD").length;
 
   const [mFilter, setMFilter] = useState("All");
+  const [sortBy, setSortBy] = useState("score");    // score | value-desc | value-asc | age-desc | age-asc | year-asc
 
   // Filter logic
   const filteredLeads = useMemo(() => {
@@ -32,9 +33,25 @@ export default function LeadsGrid({
     return displayLeads.filter(l => l.motivation?.tier === mFilter);
   }, [displayLeads, mFilter]);
 
-  const fHi = filteredLeads.filter(l => l.tier === "HIGH");
-  const fMd = filteredLeads.filter(l => l.tier === "MEDIUM");
-  const fLo = filteredLeads.filter(l => l.tier === "LOW");
+  // ── Secondary sort (within tiers, or flat if non-score sort) ─────────────
+  const applySortFn = (list) => {
+    if (sortBy === "score") return [...list].sort((a, b) => b.score - a.score);
+    if (sortBy === "value-desc") return [...list].sort((a, b) => b.estValue - a.estValue);
+    if (sortBy === "value-asc") return [...list].sort((a, b) => a.estValue - b.estValue);
+    if (sortBy === "age-desc") return [...list].sort((a, b) => b.roofAge - a.roofAge);
+    if (sortBy === "age-asc") return [...list].sort((a, b) => a.roofAge - b.roofAge);
+    if (sortBy === "year-asc") return [...list].sort((a, b) => (a.yearBuilt || 9999) - (b.yearBuilt || 9999));
+    return list;
+  };
+
+  // When using a non-score sort, flatten the list (no tier grouping) so the sort is seamless
+  const isScoreSort = sortBy === "score";
+
+  const sortedFiltered = useMemo(() => applySortFn(filteredLeads), [filteredLeads, sortBy]);
+
+  const fHi = isScoreSort ? applySortFn(filteredLeads.filter(l => l.tier === "HIGH")) : [];
+  const fMd = isScoreSort ? applySortFn(filteredLeads.filter(l => l.tier === "MEDIUM")) : [];
+  const fLo = isScoreSort ? applySortFn(filteredLeads.filter(l => l.tier === "LOW")) : [];
 
   // Motivation pill stats
   const mStats = useMemo(() => {
@@ -99,7 +116,7 @@ export default function LeadsGrid({
         <div className="res-stat">{selectedArea} · {leads.length} leads</div>
         <div className="row" style={{ gap: 6 }}>
 
-          {/* Sort toggle */}
+          {/* Sort toggle — Score vs Route */}
           <div style={{
             display: "flex", border: "1px solid rgba(251,146,60,.25)",
             borderRadius: 3, overflow: "hidden"
@@ -116,6 +133,28 @@ export default function LeadsGrid({
               </button>
             ))}
           </div>
+
+          {/* Sort-by dropdown (visible in score mode) */}
+          {sortMode === "score" && (
+            <select
+              value={sortBy}
+              onChange={e => setSortBy(e.target.value)}
+              style={{
+                padding: "4px 6px", fontSize: ".65rem",
+                fontFamily: "'Bebas Neue',sans-serif", letterSpacing: ".06em",
+                background: "#131920", color: "#fb923c",
+                border: "1px solid rgba(251,146,60,.25)", borderRadius: 3,
+                cursor: "pointer",
+              }}
+            >
+              <option value="score">Sort: Score ↓</option>
+              <option value="value-desc">Sort: Value ↓</option>
+              <option value="value-asc">Sort: Value ↑</option>
+              <option value="age-desc">Sort: Roof Age ↓</option>
+              <option value="age-asc">Sort: Roof Age ↑</option>
+              <option value="year-asc">Sort: Oldest Built</option>
+            </select>
+          )}
 
           {pulledPins.size > 0 && (
             <button
@@ -183,7 +222,7 @@ export default function LeadsGrid({
       {/* ── Lead list ── */}
       {sortMode === "route" ? (
         filteredDisplay.map((l, i) => <LeadCard key={i} lead={l} />)
-      ) : (
+      ) : isScoreSort ? (
         [["HIGH", fHi, "hi", "🔴"], ["MEDIUM", fMd, "md", "🟡"], ["LOW", fLo, "lo", "🟢"]].map(
           ([tier, list, cls, ico]) =>
             list.length > 0 && (
@@ -193,6 +232,9 @@ export default function LeadsGrid({
               </div>
             )
         )
+      ) : (
+        /* Flat sorted list (non-score sort — no tier grouping) */
+        sortedFiltered.map((l, i) => <LeadCard key={i} lead={l} />)
       )}
     </>
   );
