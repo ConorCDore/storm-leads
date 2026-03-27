@@ -303,6 +303,19 @@ export default function StormLeads() {
     return () => clearTimeout(t);
   }, [alerts, alertsDone, selectedArea, maxYear, limit, minValue, maxValue, leads, weights, globalLeads, pulledPins, propTypes]);
 
+  const resetAll = () => {
+    if (!confirm("Clear all data? Leads, alerts, and settings will be reset.")) return;
+    localStorage.removeItem(SL_KEY);
+    setAlerts([]); setAlertsDone(false); setLeads([]); setGlobalLeads([]);
+    setRows([]); setPulledPins(new Set()); setPullStatus(""); setPullError("");
+    setWeights({...DEFAULT_WEIGHTS}); setPropTypes(new Set(DEFAULT_PROP_TYPES));
+    setSelectedArea(COOK_AREAS[0].label); setMaxYear(2010); setLimit(100);
+    setMinValue(0); setMaxValue(0); setMinHailSize(0); setHardHitOnly(false);
+    setSelectedZips([]); setStormHistory({}); setHwo(null);
+    setDateMode("live"); setQuickDays(1); setDateFrom(""); setDateTo("");
+    setTab("dashboard");
+  };
+
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
@@ -573,8 +586,9 @@ export default function StormLeads() {
       
       const addrNorm = raw.map(normaliseRow).filter(r => r.address || r.pin);
       const { merged } = await enrichAddresses(addrNorm, setPullStatus);
-      
-      const scored = merged.map(r => {
+      const filtered = filterByClass(merged, propTypes);
+
+      const scored = filtered.map(r => {
         const areaName = AREA_MAP.find(a => a.city === r.city)?.label || selectedArea;
         const alertInfo = areaSeverity[areaName] || { pts: 0, label: "No alerts" };
         const motivation = classifyMotivation(r);
@@ -621,7 +635,7 @@ export default function StormLeads() {
 
           {/* Header */}
           <div className="hd">
-            <div className="logo">⛈ Storm<span>Leads</span></div>
+            <div className="logo" onClick={resetAll} style={{cursor:"pointer"}} title="Click to reset all data">⛈ Storm<span>Leads</span></div>
             <div className="sub">Chicago Suburbs · Storm Damage Lead Scoring</div>
             <span className="badge">✓ 100% Free Data Sources</span>
           </div>
