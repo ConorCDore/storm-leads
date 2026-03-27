@@ -195,8 +195,8 @@ export function classifyMotivation(row) {
   const isInvestor = investorKeywords.some(k => ownerName.toUpperCase().includes(k));
 
   // ── 2. Equity Gap — Purchased significantly below market value ────────────
-  // Cook County AV is usually 10% of market value.
-  const estMarketValue = (parseFloat(row.value) || 0) * 10;
+  // Cook County AV ≈ market / 3.3 (assessment level ~10%, equalization factor ~3.3)
+  const estMarketValue = (parseFloat(row.value) || 0) * 3.3;
   const isDistressed = salePrice > 0 && estMarketValue > 0 && salePrice < (estMarketValue * 0.75);
 
   // ── 3. Non-resident flag — mailing city differs from property city ────────────

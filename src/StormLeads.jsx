@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, lazy, Suspense } from "react";
 import { AREA_MAP, COOK_AREAS, OTHER_AREAS, STORM_EVENTS, DEFAULT_WEIGHTS, WEIGHT_LABELS, CITY_ZIPS } from "./constants";
 import { parseCSV, normaliseRow } from "./utils/parsers";
-import { scoreProperty, filterByValue } from "./utils/scoring";
+import { scoreProperty, filterByValue, filterByClass } from "./utils/scoring";
 import { fetchHistoricalAlerts, fetchLiveAlerts, fetchHWO, fetchStormHistory as fetchStormHistoryApi } from "./utils/stormApi";
 import { fetchAddressesByCity, fetchAddressesByZip, getGlobalMotivatedLeads, enrichAddresses, classifyMotivation } from "./utils/cookCountyApi";
 import Dashboard  from "./components/Dashboard";
@@ -218,25 +218,42 @@ const CSS = `
   .app.light .lead-sum { color:#ea580c; }
 `;
 
+// ── localStorage helpers ──────────────────────────────────────────────────────
+const SL_KEY = "sl-state";
+function loadSaved() {
+  try {
+    const raw = localStorage.getItem(SL_KEY);
+    if (!raw) return {};
+    const d = JSON.parse(raw);
+    // Check if saved data is stale (> 24 hours old)
+    if (d._ts && Date.now() - d._ts > 24 * 60 * 60 * 1000) {
+      localStorage.removeItem(SL_KEY);
+      return {};
+    }
+    return d;
+  } catch { return {}; }
+}
+const _saved = loadSaved();
+
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function StormLeads() {
   const [tab,            setTab]            = useState("dashboard");
-  const [alerts,         setAlerts]         = useState([]);
+  const [alerts,         setAlerts]         = useState(_saved.alerts || []);
   const [fetchingAlerts, setFetchingAlerts] = useState(false);
-  const [alertsDone,     setAlertsDone]     = useState(false);
-  const [selectedArea,   setSelectedArea]   = useState(COOK_AREAS[0].label);
-  const [maxYear,        setMaxYear]        = useState(2010);
-  const [limit,          setLimit]          = useState(100);
-  const [minValue,       setMinValue]       = useState(0);      // min market value filter (0 = no min)
-  const [maxValue,       setMaxValue]       = useState(0);      // max market value filter (0 = no max)
-  const [rows,           setRows]           = useState([]);   // normalised CSV rows (merged)
-  const [leads,          setLeads]          = useState([]);
+  const [alertsDone,     setAlertsDone]     = useState(_saved.alertsDone || false);
+  const [selectedArea,   setSelectedArea]   = useState(_saved.selectedArea || COOK_AREAS[0].label);
+  const [maxYear,        setMaxYear]        = useState(_saved.maxYear || 2010);
+  const [limit,          setLimit]          = useState(_saved.limit || 100);
+  const [minValue,       setMinValue]       = useState(_saved.minValue || 0);
+  const [maxValue,       setMaxValue]       = useState(_saved.maxValue || 0);
+  const [rows,           setRows]           = useState([]);   // normalised CSV rows (not persisted — too large)
+  const [leads,          setLeads]          = useState(_saved.leads || []);
   const [pulling,        setPulling]        = useState(false); // fetching from Socrata
   const [pullStatus,     setPullStatus]     = useState("");    // progress text
   const [pullError,      setPullError]      = useState("");
-  const [weights,        setWeights]        = useState({...DEFAULT_WEIGHTS});
-  const [pulledPins,     setPulledPins]     = useState(new Set());
-  const [globalLeads,    setGlobalLeads]    = useState([]); // Cross-area top prospects
+  const [weights,        setWeights]        = useState(_saved.weights || {...DEFAULT_WEIGHTS});
+  const [pulledPins,     setPulledPins]     = useState(new Set(_saved.pulledPins || []));
+  const [globalLeads,    setGlobalLeads]    = useState(_saved.globalLeads || []);
   const [isScouting,     setIsScouting]     = useState(false);
   const [hwo,            setHwo]            = useState(null); // { hailMentioned, severeMentioned, summary }
   const [dateMode,       setDateMode]       = useState("live");  // "live" | "quick" | "range"
@@ -264,6 +281,22 @@ export default function StormLeads() {
       document.head.appendChild(el);
     }
   }, []);
+
+  // ── Persist critical state to localStorage ─────────────────────────────────
+  useEffect(() => {
+    // Debounce: only save after state settles (avoids thrashing during pulls)
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(SL_KEY, JSON.stringify({
+          _ts: Date.now(),
+          alerts, alertsDone, selectedArea, maxYear, limit, minValue, maxValue,
+          leads, weights, globalLeads,
+          pulledPins: [...pulledPins],
+        }));
+      } catch { /* quota exceeded — non-fatal */ }
+    }, 500);
+    return () => clearTimeout(t);
+  }, [alerts, alertsDone, selectedArea, maxYear, limit, minValue, maxValue, leads, weights, globalLeads, pulledPins]);
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -329,12 +362,16 @@ export default function StormLeads() {
     const roofEst   = merged.length - roofCount;
     const newMerged = merged.filter(r => !r.pin || !pulledPins.has(r.pin));
     const dupCount  = merged.length - newMerged.length;
-    const filtered  = filterByValue(newMerged, minValue, maxValue);
+    const afterClass = filterByClass(newMerged);
+    const classFiltered = newMerged.length - afterClass.length;
+    const filtered  = filterByValue(afterClass, minValue, maxValue);
+    const valueFiltered = afterClass.length - filtered.length;
     setPullStatus(
       `Enriched ${matchCount}/${addrNorm.length} · ` +
       `Roof: ${roofCount} verified, ${roofEst} estimated · ${permitCount} permits` +
       `${dupCount ? ` · ${dupCount} dup suppressed` : ""}` +
-      `${filtered.length < newMerged.length ? ` · ${newMerged.length - filtered.length} filtered by value` : ""}. Scoring…`
+      `${classFiltered ? ` · ${classFiltered} non-residential excluded` : ""}` +
+      `${valueFiltered ? ` · ${valueFiltered} filtered by value` : ""}. Scoring…`
     );
     setRows(filtered);
     const alertInfo = getAlertScore();
@@ -491,7 +528,7 @@ export default function StormLeads() {
 
   const scoreLeads = (switchTab = true) => {
     if (!rows.length) return;
-    const filtered = filterByValue(rows, minValue, maxValue);
+    const filtered = filterByValue(filterByClass(rows), minValue, maxValue);
     const alertInfo = getAlertScore();
     const scored = filtered.map(r => {
       const motivation = classifyMotivation(r);

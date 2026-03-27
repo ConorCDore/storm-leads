@@ -10,6 +10,29 @@ export function inferRoofMaterial(yr) {
   return { score: 2, label: "Est. architectural shingle" };
 }
 
+// ── Property class filter ─────────────────────────────────────────────────────
+// Cook County class codes: 2xx = residential, 3xx = multi-family/condo,
+// 1xx = vacant land, 5xx = commercial/industrial, 0/9 = exempt
+// We keep only residential single-family (class 2xx) plus unknowns.
+const EXCLUDED_CLASSES = new Set([
+  "300","313","314","315","318","390","399",   // condos, co-ops
+  "100","190","199","241",                      // vacant land
+  "500","501","517","522","523","525","526","527","528","529","535","550","590","591","592","597","599", // commercial
+  "900","000",                                  // exempt / unknown-exempt
+]);
+
+export function filterByClass(properties) {
+  return properties.filter(r => {
+    const cls = (r.cls || "").replace(/\D/g, "").slice(0, 3);
+    if (!cls) return true; // keep unknowns
+    if (EXCLUDED_CLASSES.has(cls)) return false;
+    // Also exclude any 3xx (condo/multi), 5xx (commercial), 1xx (vacant) generically
+    const prefix = cls.charAt(0);
+    if (prefix === "3" || prefix === "5" || prefix === "1" || prefix === "9") return false;
+    return true;
+  });
+}
+
 // ── Value filter ──────────────────────────────────────────────────────────────
 // Converts operator's market-value range to AV equivalent (AV ≈ market / 3.3)
 export function filterByValue(properties, minValue, maxValue) {
@@ -76,12 +99,20 @@ export function scoreProperty(r, alertInfo, weights, maxYear = 2010, motivation 
 
   // Permit History (0-3)
   const permitYr = parseInt(r.lastPermitYear);
+  const isRoofPermit = r.isRoofPermit;
   if (!permitYr) { factors.permitAge = 2; factorDetails.permitAge = "No roof permit found"; }
   else if (thisYear - permitYr > 15) { factors.permitAge = 3; factorDetails.permitAge = `Last permit ${permitYr} (aged)`; }
   else if (thisYear - permitYr > 10) { factors.permitAge = 2; factorDetails.permitAge = `Last permit ${permitYr}`; }
   else if (thisYear - permitYr > 5) { factors.permitAge = 1; factorDetails.permitAge = `Permit ${permitYr}`; }
   else { factors.permitAge = 0; factorDetails.permitAge = `Recent permit ${permitYr}`; }
   reasons.push(factorDetails.permitAge);
+
+  // Permit ↔ Roof Age interaction: if a ROOF permit exists within the last 10 years,
+  // the roof was likely replaced — cap roofAge score at 1 regardless of build year
+  if (isRoofPermit && permitYr && (thisYear - permitYr) <= 10 && factors.roofAge > 1) {
+    factors.roofAge = 1;
+    factorDetails.roofAge = `Built ${yr} — roof permit ${permitYr} (likely replaced)`;
+  }
 
   // Motivation (0-3)
   const m = motivation?.tier || "STANDARD";
