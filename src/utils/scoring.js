@@ -36,10 +36,10 @@ export function scoreProperty(r, alertInfo, weights, maxYear = 2010, motivation 
 
   // Roof Age (0-3)
   const yr = parseInt(r.year);
-  if (yr >= 1960 && yr <= 1990) { factors.roofAge = 3; factorDetails.roofAge = `Built ${yr} (prime age)`; }
+  if (yr > 1850 && yr <= 1990) { factors.roofAge = 3; factorDetails.roofAge = `Built ${yr} (prime age)`; }
   else if (yr >= 1991 && yr <= 2005) { factors.roofAge = 2; factorDetails.roofAge = `Built ${yr}`; }
-  else if (yr > 2005 && yr <= maxYear) { factors.roofAge = 1; factorDetails.roofAge = `Built ${yr}`; }
-  else { factors.roofAge = 1; factorDetails.roofAge = yr > 0 ? `Built ${yr}` : "Year unknown"; }
+  else if (yr > 2005 && yr < 2025) { factors.roofAge = 1; factorDetails.roofAge = `Built ${yr}`; }
+  else { factors.roofAge = 0; factorDetails.roofAge = "Age Unknown"; }
   reasons.push(factorDetails.roofAge);
 
   // Property Value (0-3)
@@ -125,5 +125,5 @@ export function scoreProperty(r, alertInfo, weights, maxYear = 2010, motivation 
     detail: factorDetails[key] || "",
   }));
 
-  return { pin: r.pin || "", address, score, tier, reason: reasons.join(" · "), summary, breakdown };
+  return { pin: r.pin || "", address, score, tier, reason: reasons.join(" · "), summary, breakdown, motivation };
 }
